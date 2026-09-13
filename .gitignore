@@ -1,0 +1,12 @@
+node_modules/
+scratch*/
+runtime/
+dist/
+desktop/build-info.json
+connection.json
+*.log
+.DS_Store
+/src/server/**/*.js
+/src/server/**/*.js.map
+/src/server/**/*.d.ts
+/src/server/**/*.d.ts.map

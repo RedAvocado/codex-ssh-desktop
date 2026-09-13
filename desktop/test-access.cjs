@@ -1,0 +1,14 @@
+const assert=require('node:assert/strict');
+const {tokenMatches,bearerToken,sessionToken,authorized,viewerOrigin}=require('../src/server/access.js');
+const token='a'.repeat(64);
+assert.equal(tokenMatches(token,token),true);
+assert.equal(tokenMatches('é'.repeat(64),token),false);
+assert.equal(tokenMatches(undefined,token),false);
+assert.equal(bearerToken('Bearer '+token),token);
+assert.equal(sessionToken('another=1; remote_session='+token),token);
+const headers={host:'127.0.0.1:18214',cookie:'remote_session='+token,origin:viewerOrigin};
+assert.equal(authorized(headers,token),true);
+assert.equal(authorized({...headers,origin:'https://example.org'},token),false);
+assert.equal(authorized({...headers,host:'example.org'},token),false);
+assert.equal(authorized({...headers,cookie:''},token),false);
+console.log('Viewer access checks passed: token, Unicode input, host, origin, and missing session.');

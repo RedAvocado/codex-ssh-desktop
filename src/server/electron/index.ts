@@ -1,0 +1,1133 @@
+import path from 'node:path';
+import os from 'node:os';
+type StubFunction = (...args: unknown[]) => unknown;
+type StubListener = (...args: unknown[]) => void;
+type StubMessagePort = {
+  close: () => void;
+  on: (event: string, listener: StubListener) => unknown;
+  postMessage: (message: unknown) => void;
+  start: () => void;
+};
+type StubWebContents = {
+  id: number;
+  mainFrame: {
+    url: string;
+  };
+  getURL: () => string;
+  isDestroyed: () => boolean;
+  off: (event: string, listener: StubListener) => unknown;
+  on: (event: string, listener: StubListener) => unknown;
+  once: (event: string, listener: StubListener) => unknown;
+  removeListener: (event: string, listener: StubListener) => unknown;
+  send: (channel: string, ...args: unknown[]) => void;
+};
+type IpcMainEvent = {
+  returnValue: unknown;
+  processId: number;
+  frameId: number;
+  sender: StubWebContents;
+  senderFrame: {
+    url: string;
+  };
+  ports: StubMessagePort[];
+  reply: (channel: string, ...args: unknown[]) => void;
+};
+
+type IpcMainBridgeState = {
+  sendToRenderer?: (
+    webContentsId: number,
+    message: {
+      type: "ipc-main-event";
+      channel: string;
+      args: unknown[];
+    },
+  ) => void;
+  handleRendererInvoke?: (
+    channel: string,
+    args: unknown[],
+    windowId: number,
+  ) => Promise<unknown>;
+  handleRendererPostMessage?: (
+    channel: string,
+    message: unknown,
+    ports: StubMessagePort[],
+    windowId: number,
+  ) => void;
+  handleRendererSend?: (
+    channel: string,
+    args: unknown[],
+    windowId: number,
+  ) => void;
+};
+
+function getIpcMainBridgeState(): IpcMainBridgeState {
+  const globals = globalThis as typeof globalThis & {
+    __codexElectronIpcBridge?: IpcMainBridgeState;
+  };
+  if (!globals.__codexElectronIpcBridge) {
+    globals.__codexElectronIpcBridge = {};
+  }
+  return globals.__codexElectronIpcBridge;
+}
+
+function log(method: string, args: unknown[]): void {
+  if(process.env.CODEX_REMOTE_DEBUG_SHIM==='1')console.log(`[electron-main-stub] ${method}`);
+}
+
+function createDeepStub(pathLabel: string): StubFunction {
+  const fn: StubFunction = (...args: unknown[]) => {
+    log(`${pathLabel}()`, args);
+    return undefined;
+  };
+
+  return new Proxy(fn, {
+    apply(_target, _thisArg, argArray) {
+      log(`${pathLabel}()`, argArray);
+      return undefined;
+    },
+    construct(_target, argArray) {
+      log(`new ${pathLabel}()`, argArray);
+      return {};
+    },
+    get(_target, prop) {
+      if (prop === "then") {
+        return undefined;
+      }
+
+      if (prop === Symbol.toPrimitive) {
+        return () => pathLabel;
+      }
+
+      return createDeepStub(`${pathLabel}.${String(prop)}`);
+    },
+  });
+}
+
+function createEmitterStub(label: string): {
+  addListener: (event: string, listener: StubListener) => unknown;
+  emit: (event: string, ...args: unknown[]) => boolean;
+  off: (event: string, listener: StubListener) => unknown;
+  on: (event: string, listener: StubListener) => unknown;
+  once: (event: string, listener: StubListener) => unknown;
+  removeListener: (event: string, listener: StubListener) => unknown;
+} {
+  const listeners = new Map<string, Set<StubListener>>();
+
+  const api = {
+    on(event: string, listener: StubListener): unknown {
+      log(`${label}.on`, [event, listener]);
+      const eventListeners = listeners.get(event) ?? new Set<StubListener>();
+      eventListeners.add(listener);
+      listeners.set(event, eventListeners);
+      return api;
+    },
+    once(event: string, listener: StubListener): unknown {
+      log(`${label}.once`, [event, listener]);
+      const wrapped: StubListener = (...args: unknown[]) => {
+        api.removeListener(event, wrapped);
+        listener(...args);
+      };
+      return api.on(event, wrapped);
+    },
+    addListener(event: string, listener: StubListener): unknown {
+      log(`${label}.addListener`, [event, listener]);
+      return api.on(event, listener);
+    },
+    removeListener(event: string, listener: StubListener): unknown {
+      log(`${label}.removeListener`, [event, listener]);
+      listeners.get(event)?.delete(listener);
+      return api;
+    },
+    off(event: string, listener: StubListener): unknown {
+      log(`${label}.off`, [event, listener]);
+      return api.removeListener(event, listener);
+    },
+    emit(event: string, ...args: unknown[]): boolean {
+      log(`${label}.emit`, [event, ...args]);
+      for (const listener of listeners.get(event) ?? []) {
+        listener(...args);
+      }
+      return true;
+    },
+  };
+
+  return api;
+}
+
+function createMessagePortStub(label: string): {
+  on: (event: string, listener: StubListener) => unknown;
+  postMessage: (...args: unknown[]) => void;
+  start: () => void;
+} {
+  const emitter = createEmitterStub(label);
+  return {
+    on: emitter.on,
+    postMessage(...args: unknown[]): void {
+      log(`${label}.postMessage`, args);
+    },
+    start(): void {
+      log(`${label}.start`, []);
+    },
+  };
+}
+
+function createIpcMainEvent(
+  windowId: number,
+  ports: StubMessagePort[] = [],
+): IpcMainEvent {
+  const window = BrowserWindow.fromId(windowId);
+  if (!window || window.isDestroyed()) {
+    throw new Error(
+      `[electron-main-stub] Renderer window ${windowId} is closed`,
+    );
+  }
+  const sender = window.webContents as unknown as StubWebContents;
+  return {
+    returnValue: undefined,
+    processId: windowId,
+    frameId: 1,
+    sender,
+    senderFrame: sender.mainFrame,
+    ports,
+    reply: (channel: string, ...args: unknown[]): void => {
+      sender.send(channel, ...args);
+    },
+  };
+}
+
+function createIpcMainStub(): {
+  handle: (
+    channel: string,
+    handler: (event: unknown, ...args: unknown[]) => unknown,
+  ) => void;
+  off: (event: string, listener: StubListener) => unknown;
+  on: (event: string, listener: StubListener) => unknown;
+  removeHandler: (channel: string) => void;
+} {
+  const emitter = createEmitterStub("ipcMain");
+  const handlers = new Map<
+    string,
+    (event: unknown, ...args: unknown[]) => unknown
+  >();
+  const bridgeState = getIpcMainBridgeState();
+
+  const pendingPostMessages = new Map<
+    string,
+    Array<{ message: unknown; ports: StubMessagePort[]; windowId: number }>
+  >();
+  const registeredPostMessageChannels = new Set<string>();
+
+  bridgeState.handleRendererPostMessage = (
+    channel: string,
+    message: unknown,
+    ports: StubMessagePort[],
+    windowId: number,
+  ): void => {
+    if (registeredPostMessageChannels.has(channel)) {
+      emitter.emit(channel, createIpcMainEvent(windowId, ports), message);
+      return;
+    }
+    const pending = pendingPostMessages.get(channel) ?? [];
+    pending.push({ message, ports, windowId });
+    pendingPostMessages.set(channel, pending);
+  };
+
+  bridgeState.handleRendererInvoke = async (
+    channel: string,
+    args: unknown[],
+    windowId: number,
+  ): Promise<unknown> => {
+    const handler = handlers.get(channel);
+    if (!handler) {
+      throw new Error(`[electron-main-stub] No ipcMain.handle for ${channel}`);
+    }
+    const event = createIpcMainEvent(windowId);
+    return await Promise.resolve(handler(event, ...args));
+  };
+
+  bridgeState.handleRendererSend = (
+    channel: string,
+    args: unknown[],
+    windowId: number,
+  ): void => {
+    const event = createIpcMainEvent(windowId);
+    emitter.emit(channel, event, ...args);
+  };
+
+  return {
+    on(channel: string, listener: StubListener): unknown {
+      const result = emitter.on(channel, listener);
+      registeredPostMessageChannels.add(channel);
+      const pending = pendingPostMessages.get(channel);
+      if (pending) {
+        pendingPostMessages.delete(channel);
+        for (const { message, ports, windowId } of pending) {
+          if (!BrowserWindow.fromId(windowId)) continue;
+          emitter.emit(channel, createIpcMainEvent(windowId, ports), message);
+        }
+      }
+      return result;
+    },
+    off: emitter.off,
+    handle(
+      channel: string,
+      handler: (event: unknown, ...args: unknown[]) => unknown,
+    ): void {
+      log("ipcMain.handle", [channel, handler]);
+      handlers.set(channel, handler);
+    },
+    removeHandler(channel: string): void {
+      log("ipcMain.removeHandler", [channel]);
+      handlers.delete(channel);
+    },
+  };
+}
+
+let appReady = false;
+const appPaths=new Map<string,string>([
+  ['home',os.homedir()],['temp',os.tmpdir()],
+  ['userData',process.env.CODEX_ELECTRON_USER_DATA_PATH||process.cwd()],
+  ['sessionData',process.env.CODEX_ELECTRON_USER_DATA_PATH||process.cwd()],
+  ['appData',path.join(os.homedir(),'Library/Application Support')],
+  ['documents',path.join(os.homedir(),'Documents')],
+  ['downloads',path.join(os.homedir(),'Downloads')],
+  ['desktop',path.join(os.homedir(),'Desktop')],['exe',process.execPath],
+]);
+const commandLineSwitches = new Map<string, string>();
+const commandLineArguments: string[] = [];
+
+const appBase = {
+  ...createEmitterStub("app"),
+  name: "Codex",
+  isPackaged: false,
+  getName(): string {
+    log("app.getName", []);
+    return "Codex";
+  },
+  getVersion(): string {
+    return globalThis.__CODEX_SHIM_VALUES__.version;
+  },
+  getLocale(): string {
+    log("app.getLocale", []);
+    return "en-US";
+  },
+  getSystemLocale(): string {
+    log("app.getSystemLocale", []);
+    return "en-US";
+  },
+  getPreferredSystemLanguages(): string[] {
+    log("app.getPreferredSystemLanguages", []);
+    return ["en-US"];
+  },
+  getPath(name: string): string {
+    log("app.getPath", [name]);
+    return appPaths.get(name)??process.cwd();
+  },
+  getAppMetrics(): unknown[] {
+    log("app.getAppMetrics", []);
+    return [];
+  },
+  getAppPath(): string {
+    log("app.getAppPath", []);
+    return path.resolve(__dirname,'../../../scratch/asar');
+  },
+  async getGPUInfo(infoLevel: string): Promise<{ gpuDevice: unknown[] }> {
+    log("app.getGPUInfo", [infoLevel]);
+    return { gpuDevice: [] };
+  },
+  setName(name: string): void {
+    log("app.setName", [name]);
+  },
+  setPath(name: string, value: string): void {
+    log("app.setPath", [name, value]);
+    appPaths.set(name,value);
+  },
+  setAppUserModelId(value: string): void {
+    log("app.setAppUserModelId", [value]);
+  },
+  requestSingleInstanceLock(): boolean {
+    log("app.requestSingleInstanceLock", []);
+    return true;
+  },
+  isReady(): boolean {
+    log("app.isReady", []);
+    return appReady;
+  },
+  whenReady(): Promise<void> {
+    log("app.whenReady", []);
+    appReady = true;
+    return Promise.resolve();
+  },
+  commandLine: {
+    appendSwitch(name: string, value?: string): void {
+      log("app.commandLine.appendSwitch", [name, value]);
+      commandLineSwitches.set(name, value ?? "");
+    },
+    appendArgument(value: string): void {
+      log("app.commandLine.appendArgument", [value]);
+      commandLineArguments.push(value);
+    },
+    getSwitchValue(name: string): string {
+      log("app.commandLine.getSwitchValue", [name]);
+      return commandLineSwitches.get(name) ?? "";
+    },
+    hasSwitch(name: string): boolean {
+      log("app.commandLine.hasSwitch", [name]);
+      return commandLineSwitches.has(name);
+    },
+    removeSwitch(name: string): void {
+      log("app.commandLine.removeSwitch", [name]);
+      commandLineSwitches.delete(name);
+    },
+  },
+  on(event: string, listener: (...args: unknown[]) => void): unknown {
+    log("app.on", [event, listener]);
+    return app;
+  },
+  once(event: string, listener: (...args: unknown[]) => void): unknown {
+    log("app.once", [event, listener]);
+    return app;
+  },
+  quit(): void {
+    log("app.quit", []);
+  },
+  exit(code?: number): void {
+    log("app.exit", [code]);
+  },
+};
+
+const app = new Proxy(appBase as Record<string, unknown>, {
+  get(target, prop) {
+    if (prop in target) {
+      return target[prop as keyof typeof target];
+    }
+
+    return createDeepStub(`app.${String(prop)}`);
+  },
+}) as typeof appBase;
+
+class BrowserWindow {
+  static isInputShapeSupported(): boolean {
+    return false;
+  }
+
+  static isSystemBackdropSupported(): boolean {
+    return false;
+  }
+
+  static fromId(id: number): BrowserWindow | null {
+    return (
+      BrowserWindow.getAllWindows().find((window) => window.id === id) ?? null
+    );
+  }
+
+  static nextId = 1;
+  static allWindows: BrowserWindow[] = [];
+  static focusedWindow: BrowserWindow | null = null;
+  id: number;
+  private destroyed = false;
+  private visible = true;
+  private title = "Codex";
+  private bounds = { x: 0, y: 0, width: 1280, height: 820 };
+  webContents: Record<string, unknown>;
+  private readonly emitter: ReturnType<typeof createEmitterStub>;
+
+  constructor(...args: unknown[]) {
+    log("new BrowserWindow", args);
+    this.visible = (args[0] as { show?: boolean } | undefined)?.show !== false;
+    this.id = BrowserWindow.nextId++;
+    this.emitter = createEmitterStub(`BrowserWindow#${this.id}`);
+
+    const webContentsEmitter = createEmitterStub(
+      `BrowserWindow#${this.id}.webContents`,
+    );
+    this.webContents = new Proxy(
+      {
+        ...webContentsEmitter,
+        id: this.id * 1000 + 1,
+        mainFrame: {
+          url: "",
+        },
+        getURL: (): string => {
+          log(`BrowserWindow#${this.id}.webContents.getURL`, []);
+          return String(
+            (this.webContents.mainFrame as { url?: string } | undefined)?.url ??
+              "",
+          );
+        },
+        isDestroyed: (): boolean => this.destroyed,
+        loadURL: async (url: string): Promise<void> => {
+          log(`BrowserWindow#${this.id}.webContents.loadURL`, [url]);
+          (this.webContents.mainFrame as { url: string }).url = url;
+        },
+        loadFile: async (...loadFileArgs: unknown[]): Promise<void> => {
+          log(`BrowserWindow#${this.id}.webContents.loadFile`, loadFileArgs);
+        },
+        openDevTools: (...openDevToolsArgs: unknown[]): void => {
+          log(
+            `BrowserWindow#${this.id}.webContents.openDevTools`,
+            openDevToolsArgs,
+          );
+        },
+        send: (...sendArgs: unknown[]): void => {
+          log(`BrowserWindow#${this.id}.webContents.send`, sendArgs);
+          if (sendArgs.length === 0 || typeof sendArgs[0] !== "string") {
+            return;
+          }
+          const [channel, ...args] = sendArgs as [string, ...unknown[]];
+          getIpcMainBridgeState().sendToRenderer?.(
+            this.webContents.id as number,
+            {
+              type: "ipc-main-event",
+              channel,
+              args,
+            },
+          );
+        },
+      } as Record<string, unknown>,
+      {
+        get: (target, prop) => {
+          // Async Electron APIs can return this proxy; it must not be thenable.
+          if (prop === "then") {
+            return undefined;
+          }
+          if (prop in target) {
+            return target[prop as keyof typeof target];
+          }
+          return createDeepStub(
+            `BrowserWindow#${this.id}.webContents.${String(prop)}`,
+          );
+        },
+      },
+    );
+
+    const window = new Proxy(this, {
+      get: (target, prop) => {
+        if (prop === "then") {
+          return undefined;
+        }
+        if (prop in target) {
+          return target[prop as keyof typeof target];
+        }
+        return createDeepStub(`BrowserWindow#${target.id}.${String(prop)}`);
+      },
+    });
+    BrowserWindow.allWindows.push(window);
+    BrowserWindow.focusedWindow = window;
+    return window;
+  }
+
+  static getAllWindows(): BrowserWindow[] {
+    log("BrowserWindow.getAllWindows", []);
+    return BrowserWindow.allWindows.filter((window) => !window.destroyed);
+  }
+
+  static getFocusedWindow(): BrowserWindow | null {
+    log("BrowserWindow.getFocusedWindow", []);
+    if (BrowserWindow.focusedWindow && !BrowserWindow.focusedWindow.destroyed) {
+      return BrowserWindow.focusedWindow;
+    }
+    return BrowserWindow.getAllWindows()[0] ?? null;
+  }
+
+  static fromWebContents(
+    webContents: { id?: unknown } | null | undefined,
+  ): BrowserWindow | null {
+    log("BrowserWindow.fromWebContents", [webContents]);
+    if (!webContents) {
+      return null;
+    }
+
+    return (
+      BrowserWindow.getAllWindows().find(
+        (window) =>
+          window.webContents === webContents ||
+          window.webContents.id === webContents.id,
+      ) ?? null
+    );
+  }
+
+  on(event: string, listener: StubListener): unknown {
+    return this.emitter.on(event, listener);
+  }
+
+  once(event: string, listener: StubListener): unknown {
+    return this.emitter.once(event, listener);
+  }
+
+  off(event: string, listener: StubListener): unknown {
+    return this.emitter.off(event, listener);
+  }
+
+  removeListener(event: string, listener: StubListener): unknown {
+    return this.emitter.removeListener(event, listener);
+  }
+
+  async loadURL(url: string): Promise<void> {
+    log(`BrowserWindow#${this.id}.loadURL`, [url]);
+    (this.webContents.mainFrame as { url: string }).url = url;
+  }
+
+  close(): void {
+    log(`BrowserWindow#${this.id}.close`, []);
+    this.emitter.emit("close", {
+      preventDefault: () => undefined,
+    });
+    this.destroy();
+  }
+
+  destroy(): void {
+    log(`BrowserWindow#${this.id}.destroy`, []);
+    if (this.destroyed) return;
+    this.destroyed = true;
+    (this.webContents.emit as StubFunction)("destroyed");
+    BrowserWindow.allWindows = BrowserWindow.allWindows.filter(
+      (window) => window !== this,
+    );
+    if (BrowserWindow.focusedWindow === this) {
+      BrowserWindow.focusedWindow = null;
+    }
+    this.emitter.emit("closed");
+  }
+
+  isDestroyed(): boolean {
+    log(`BrowserWindow#${this.id}.isDestroyed`, []);
+    return this.destroyed;
+  }
+
+  isFocused(): boolean {
+    log(`BrowserWindow#${this.id}.isFocused`, []);
+    return BrowserWindow.focusedWindow === this && !this.destroyed;
+  }
+
+  isVisible(): boolean {
+    return this.visible && !this.destroyed;
+  }
+
+  removeMenu(): void {
+    log(`BrowserWindow#${this.id}.removeMenu`, []);
+  }
+
+  getTitle(): string {
+    log(`BrowserWindow#${this.id}.getTitle`, []);
+    return this.title;
+  }
+
+  setTitle(nextTitle: string): void {
+    log(`BrowserWindow#${this.id}.setTitle`, [nextTitle]);
+    this.title = nextTitle;
+  }
+
+  getBounds(): { height: number; width: number; x: number; y: number } {
+    log(`BrowserWindow#${this.id}.getBounds`, []);
+    return { ...this.bounds };
+  }
+
+  setBounds(nextBounds: {
+    height?: number;
+    width?: number;
+    x?: number;
+    y?: number;
+  }): void {
+    log(`BrowserWindow#${this.id}.setBounds`, [nextBounds]);
+    this.bounds = {
+      x: nextBounds.x ?? this.bounds.x,
+      y: nextBounds.y ?? this.bounds.y,
+      width: nextBounds.width ?? this.bounds.width,
+      height: nextBounds.height ?? this.bounds.height,
+    };
+  }
+
+  show(): void {
+    log(`BrowserWindow#${this.id}.show`, []);
+    this.visible = true;
+  }
+
+  hide(): void {
+    log(`BrowserWindow#${this.id}.hide`, []);
+    this.visible = false;
+  }
+
+  focus(): void {
+    log(`BrowserWindow#${this.id}.focus`, []);
+    BrowserWindow.focusedWindow = this;
+    this.emitter.emit("focus");
+  }
+}
+
+class WebContentsView {
+  constructor(...args: unknown[]) {
+    log("new WebContentsView", args);
+  }
+}
+
+class Menu {
+  static applicationMenu: Menu | null = null;
+  items: MenuItem[] = [];
+
+  constructor(items: MenuItem[] = []) {
+    this.items = items;
+  }
+
+  static buildFromTemplate(template: unknown[]): Menu {
+    log("Menu.buildFromTemplate", [template]);
+    const items = template.map((entry) => new MenuItem(entry));
+    return new Menu(items);
+  }
+
+  static setApplicationMenu(menu: Menu | null): void {
+    log("Menu.setApplicationMenu", [menu]);
+    Menu.applicationMenu = menu;
+  }
+
+  static getApplicationMenu(): Menu | null {
+    log("Menu.getApplicationMenu", []);
+    return Menu.applicationMenu;
+  }
+
+  getMenuItemById(id: string): MenuItem | undefined {
+    log("Menu.getMenuItemById", [id]);
+    const queue = [...this.items];
+    while (queue.length > 0) {
+      const candidate = queue.shift();
+      if (!candidate) {
+        continue;
+      }
+      if (candidate.id === id) {
+        return candidate;
+      }
+      if (candidate.submenu) {
+        queue.push(...candidate.submenu.items);
+      }
+    }
+    return undefined;
+  }
+
+  append(item: MenuItem): void {
+    log("Menu.append", [item]);
+    this.items.push(item);
+  }
+
+  insert(pos: number, item: MenuItem): void {
+    log("Menu.insert", [pos, item]);
+    const index = Math.max(0, Math.min(pos, this.items.length));
+    this.items.splice(index, 0, item);
+  }
+
+  popup(...args: unknown[]): void {
+    log("Menu.popup", args);
+  }
+}
+
+class MenuItem {
+  checked?: boolean;
+  click?: (...args: unknown[]) => unknown;
+  enabled?: boolean;
+  id?: string;
+  label?: string;
+  role?: string;
+  submenu?: Menu;
+  type?: string;
+  visible?: boolean;
+
+  constructor(...args: unknown[]) {
+    log("new MenuItem", args);
+    const [options] = args as [Record<string, unknown>?];
+    if (!options || typeof options !== "object") {
+      return;
+    }
+    this.checked =
+      typeof options.checked === "boolean" ? options.checked : undefined;
+    this.click =
+      typeof options.click === "function"
+        ? (options.click as (...args: unknown[]) => unknown)
+        : undefined;
+    this.enabled =
+      typeof options.enabled === "boolean" ? options.enabled : undefined;
+    this.id = typeof options.id === "string" ? options.id : undefined;
+    this.label = typeof options.label === "string" ? options.label : undefined;
+    this.role = typeof options.role === "string" ? options.role : undefined;
+    this.type = typeof options.type === "string" ? options.type : undefined;
+    this.visible =
+      typeof options.visible === "boolean" ? options.visible : undefined;
+
+    const submenu = options.submenu;
+    if (Array.isArray(submenu)) {
+      this.submenu = Menu.buildFromTemplate(submenu);
+      return;
+    }
+    if (submenu instanceof Menu) {
+      this.submenu = submenu;
+    }
+  }
+}
+
+class Tray {
+  constructor(...args: unknown[]) {
+    log("new Tray", args);
+  }
+}
+
+class Notification {
+  constructor(...args: unknown[]) {
+    log("new Notification", args);
+  }
+
+  show(): void {
+    log("Notification.show", []);
+  }
+}
+
+const dialog = {
+  async showMessageBox(...args: unknown[]): Promise<{ response: number }> {
+    log("dialog.showMessageBox", args);
+    return { response: 0 };
+  },
+};
+
+const crashReporter = {
+  start(...args: unknown[]): void {
+    log("crashReporter.start", args);
+  },
+};
+
+const net = {
+  async fetch(input: string | URL, init?: RequestInit): Promise<Response> {
+    // log("net.fetch", [input, init]);
+    if (typeof globalThis.fetch === "function") {
+      return globalThis.fetch(input as URL | RequestInfo, init);
+    }
+    return new Response("", { status: 204 });
+  },
+  request(...args: unknown[]): {
+    getHeader: (name: string) => string | undefined;
+    once: (event: string, listener: StubListener) => unknown;
+    setHeader: (name: string, value: string) => void;
+  } {
+    // log("net.request", args);
+    const headers = new Map<string, string>();
+    const request = {
+      setHeader(name: string, value: string): void {
+        // log("net.request.setHeader", [name, value]);
+        headers.set(name.toLowerCase(), value);
+      },
+      getHeader(name: string): string | undefined {
+        // log("net.request.getHeader", [name]);
+        return headers.get(name.toLowerCase());
+      },
+      once(event: string, listener: StubListener): unknown {
+        // log("net.request.once", [event, listener]);
+        return request;
+      },
+    };
+    return request;
+  },
+};
+
+const autoUpdater = createEmitterStub("autoUpdater");
+const ipcMain = createIpcMainStub();
+const nativeTheme = {
+  ...createEmitterStub("nativeTheme"),
+  shouldUseDarkColors: false,
+  shouldUseHighContrastColors: false,
+  shouldUseInvertedColorScheme: false,
+  themeSource: "system",
+};
+const nativeImage = {
+  createEmpty(): { isEmpty: () => boolean } {
+    log("nativeImage.createEmpty", []);
+    return {
+      isEmpty: () => true,
+    };
+  },
+  createFromPath(imagePath: string): { isEmpty: () => boolean } {
+    log("nativeImage.createFromPath", [imagePath]);
+    return {
+      isEmpty: () => !imagePath,
+    };
+  },
+};
+const powerMonitor = {
+  ...createEmitterStub("powerMonitor"),
+  getSystemIdleState(_idleThreshold: number): string {
+    return "unknown";
+  },
+  getSystemIdleTime(): number {
+    return 0;
+  },
+  isOnBatteryPower(): boolean {
+    return false;
+  },
+};
+// Desktop shortcuts and sleep inhibitors have no native window in the web host.
+const globalShortcut = {
+  register(...args: unknown[]): boolean {
+    log("globalShortcut.register", args);
+    return false;
+  },
+  isRegistered(_accelerator: string): boolean {
+    return false;
+  },
+  unregister(...args: unknown[]): void {
+    log("globalShortcut.unregister", args);
+  },
+  unregisterAll(): void {},
+};
+const powerSaveBlocker = {
+  start(type: string): number {
+    log("powerSaveBlocker.start", [type]);
+    return 0;
+  },
+  stop(id: number): void {
+    log("powerSaveBlocker.stop", [id]);
+  },
+  isStarted(_id: number): boolean {
+    return false;
+  },
+};
+const screen = {
+  ...createEmitterStub("screen"),
+  getAllDisplays(): Array<{
+    id: number;
+    scaleFactor: number;
+    size: { height: number; width: number };
+    workArea: { height: number; width: number; x: number; y: number };
+    workAreaSize: { height: number; width: number };
+    bounds: { height: number; width: number; x: number; y: number };
+  }> {
+    log("screen.getAllDisplays", []);
+    return [this.getPrimaryDisplay()];
+  },
+  getDisplayMatching(): {
+    id: number;
+    scaleFactor: number;
+    size: { height: number; width: number };
+    workArea: { height: number; width: number; x: number; y: number };
+    workAreaSize: { height: number; width: number };
+    bounds: { height: number; width: number; x: number; y: number };
+  } {
+    log("screen.getDisplayMatching", []);
+    return this.getPrimaryDisplay();
+  },
+  getPrimaryDisplay(): {
+    id: number;
+    scaleFactor: number;
+    size: { height: number; width: number };
+    workArea: { height: number; width: number; x: number; y: number };
+    workAreaSize: { height: number; width: number };
+    bounds: { height: number; width: number; x: number; y: number };
+  } {
+    log("screen.getPrimaryDisplay", []);
+    return {
+      id: 1,
+      scaleFactor: 2,
+      size: { width: 1440, height: 900 },
+      workArea: { x: 0, y: 0, width: 1440, height: 900 },
+      workAreaSize: { width: 1440, height: 900 },
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+    };
+  },
+};
+const protocol = {
+  registerSchemesAsPrivileged(...args: unknown[]): void {
+    log("protocol.registerSchemesAsPrivileged", args);
+  },
+  handle(...args: unknown[]): void {
+    log("protocol.handle", args);
+  },
+  registerStringProtocol(...args: unknown[]): void {
+    log("protocol.registerStringProtocol", args);
+  },
+};
+function createSessionStub(label: string): {
+  cookies: ReturnType<typeof createEmitterStub> & {
+    get: (...args: unknown[]) => Promise<unknown[]>;
+    remove: (...args: unknown[]) => Promise<void>;
+    set: (...args: unknown[]) => Promise<void>;
+  };
+  getUserAgent: () => string;
+  getDownloadHistory: () => Promise<unknown[]>;
+  loadExtension: (extensionPath: string) => Promise<{
+    id: string;
+    name: string;
+    path: string;
+    version: string;
+  }>;
+  off: (event: string, listener: StubListener) => unknown;
+  on: (event: string, listener: StubListener) => unknown;
+  once: (event: string, listener: StubListener) => unknown;
+  protocol: typeof protocol;
+  removeListener: (event: string, listener: StubListener) => unknown;
+  setPermissionCheckHandler: (...args: unknown[]) => void;
+  setPermissionRequestHandler: (...args: unknown[]) => void;
+  setPreferredLanguages: (languages: string[]) => void;
+  webRequest: {
+    onBeforeRequest: (...args: unknown[]) => void;
+    onBeforeSendHeaders: (...args: unknown[]) => void;
+  };
+} {
+  const emitter = createEmitterStub(label);
+  return {
+    cookies: {
+      ...createEmitterStub(`${label}.cookies`),
+      async get(...args: unknown[]): Promise<unknown[]> {
+        log(`${label}.cookies.get`, args);
+        return [];
+      },
+      async remove(...args: unknown[]): Promise<void> {
+        log(`${label}.cookies.remove`, args);
+      },
+      async set(...args: unknown[]): Promise<void> {
+        log(`${label}.cookies.set`, args);
+      },
+    },
+    async getDownloadHistory(): Promise<unknown[]> {
+      return [];
+    },
+    async loadExtension(extensionPath: string): Promise<{
+      id: string;
+      name: string;
+      path: string;
+      version: string;
+    }> {
+      log(`${label}.loadExtension`, [extensionPath]);
+      return {
+        id: "stub-extension",
+        name: "Stub Extension",
+        path: extensionPath,
+        version: "0.0.0",
+      };
+    },
+    getUserAgent(): string {
+      log(`${label}.getUserAgent`, []);
+      return "Mozilla/5.0 AppleWebKit/537.36 Chrome/120 Safari/537.36";
+    },
+    off: emitter.off,
+    on: emitter.on,
+    once: emitter.once,
+    protocol,
+    removeListener: emitter.removeListener,
+    setPermissionCheckHandler(...args: unknown[]): void {
+      log(`${label}.setPermissionCheckHandler`, args);
+    },
+    setPermissionRequestHandler(...args: unknown[]): void {
+      log(`${label}.setPermissionRequestHandler`, args);
+    },
+    setPreferredLanguages(languages: string[]): void {
+      log(`${label}.setPreferredLanguages`, [languages]);
+    },
+    webRequest: {
+      onBeforeRequest(...args: unknown[]): void {
+        log(`${label}.webRequest.onBeforeRequest`, args);
+      },
+      onBeforeSendHeaders(...args: unknown[]): void {
+        log(`${label}.webRequest.onBeforeSendHeaders`, args);
+      },
+    },
+  };
+}
+const partitionSessions = new Map<
+  string,
+  ReturnType<typeof createSessionStub>
+>();
+const session = {
+  defaultSession: createSessionStub("session.defaultSession"),
+  fromPartition(partition: string): ReturnType<typeof createSessionStub> {
+    log("session.fromPartition", [partition]);
+    let partitionSession = partitionSessions.get(partition);
+    if (!partitionSession) {
+      partitionSession = createSessionStub(
+        `session.fromPartition(${partition})`,
+      );
+      partitionSessions.set(partition, partitionSession);
+    }
+    return partitionSession;
+  },
+};
+const utilityProcess = {
+  fork: undefined,
+};
+const webContents = {
+  fromId(id: number): Record<string, unknown> | undefined {
+    log("webContents.fromId", [id]);
+    return BrowserWindow.getAllWindows().find(
+      (window) => window.webContents.id === id,
+    )?.webContents;
+  },
+  getAllWebContents(): Record<string, unknown>[] {
+    log("webContents.getAllWebContents", []);
+    return BrowserWindow.getAllWindows().map((window) => window.webContents);
+  },
+  getFocusedWebContents(): Record<string, unknown> | null {
+    log("webContents.getFocusedWebContents", []);
+    return BrowserWindow.getFocusedWindow()?.webContents ?? null;
+  },
+};
+class MessageChannelMain {
+  port1 = createMessagePortStub("MessageChannelMain.port1");
+  port2 = createMessagePortStub("MessageChannelMain.port2");
+}
+
+const electronModule = new Proxy(
+  {
+    app,
+    BrowserWindow,
+    ipcMain,
+    autoUpdater,
+    crashReporter,
+    MessageChannelMain,
+    Menu,
+    MenuItem,
+    net,
+    nativeImage,
+    nativeTheme,
+    Notification,
+    powerMonitor,
+    powerSaveBlocker,
+    globalShortcut,
+    protocol,
+    screen,
+    session,
+    Tray,
+    utilityProcess,
+    WebContentsView,
+    webContents,
+    dialog,
+  } as Record<string, unknown>,
+  {
+    get(target, prop) {
+      if (prop in target) {
+        return target[prop as keyof typeof target];
+      }
+
+      return createDeepStub(`electron.${String(prop)}`);
+    },
+  },
+);
+
+export {
+  app,
+  autoUpdater,
+  BrowserWindow,
+  ipcMain,
+  Menu,
+  MenuItem,
+  MessageChannelMain,
+  net,
+  nativeImage,
+  nativeTheme,
+  Notification,
+  powerMonitor,
+  powerSaveBlocker,
+  globalShortcut,
+  protocol,
+  screen,
+  session,
+  Tray,
+  utilityProcess,
+  WebContentsView,
+  webContents,
+  crashReporter,
+  dialog,
+};
+export default electronModule;
