@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'"><title>Accounts · Codex SSH Desktop</title><link rel="stylesheet" href="accounts.css"></head>
+<body><main>
+<header><div><p class="eyebrow">CODEX SSH DESKTOP</p><h1>Your accounts. Across Macs.</h1></div><button id="refresh" class="secondary">Refresh</button></header>
+<p class="intro">Choose a remote account, or copy a login saved on this Mac in Codex Vitals.</p>
+<div class="notice"><strong>Switching stops all remote Codex tasks.</strong> You’ll confirm before Codex closes and relaunches with the selected account. Resume stopped tasks manually afterward.</div>
+<div id="progress" role="status" aria-live="polite"></div><div id="error" role="alert"></div><button id="check" class="secondary" hidden>Check switch status</button> <button id="recovery" class="secondary" hidden>Reconnect after recovery…</button>
+<div class="columns"><section aria-labelledby="remote-title"><div class="section-head"><h2 id="remote-title">Remote Mac</h2><span id="host" class="badge"></span></div><p class="hint">Vitals profiles and accounts copied to this remote Mac.</p><div id="remote" class="accounts"></div></section>
+<section aria-labelledby="local-title"><div class="section-head"><h2 id="local-title">This Mac</h2><span class="badge">Codex Vitals</span></div><p class="hint">Copy credentials over SSH. Copying alone leaves tasks running.</p><div id="local" class="accounts"></div></section></div>
+<footer>Access, refresh, and ID tokens stay out of this window. Copies are stored privately on the remote Mac. Login validity is checked by Codex when you use the account. If token rotation causes a sign-in error on either Mac, capture a fresh login in Vitals and copy it again.</footer>
+</main><script src="accounts.js"></script></body></html>

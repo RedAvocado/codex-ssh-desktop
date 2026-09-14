@@ -6,6 +6,8 @@ desktop/build-info.json
 connection.json
 *.log
 .DS_Store
+__pycache__/
+*.pyc
 /src/server/**/*.js
 /src/server/**/*.js.map
 /src/server/**/*.d.ts

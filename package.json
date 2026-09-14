@@ -1,14 +1,15 @@
 {
   "name": "codex-ssh-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "scripts": {
     "build:server": "tsc -p src/server",
     "build:browser": "vite build --config vite.browser.config.ts",
     "prepare:desktop": "node desktop/prepare.mjs",
     "start": "electron viewer",
-    "test": "npm run build:server && node --test test/*.test.cjs && node desktop/test-access.cjs",
+    "test": "npm run build:server && node --test test/*.test.cjs && python3 -B -m unittest discover -s test -p \"*_test.py\" && node desktop/test-access.cjs",
     "test:desktop": "node desktop/test-ownership.mjs && node desktop/test-goal-resume.mjs && node desktop/test-queued-delete.mjs",
-    "package:mac": "node scripts/package-macos.mjs"
+    "package:mac": "node scripts/package-macos.mjs",
+    "test:accounts-ui": "electron test/accounts-window.smoke.cjs"
   },
   "repository": {
     "type": "git",

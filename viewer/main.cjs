@@ -6,13 +6,14 @@ const os=require('node:os');
 const net=require('node:net');
 const {defaults,readConfig,saveConfig,remoteCommand}=require('./config.cjs');
 const {checkForUpdates,repository,releasesUrl}=require('./updates.cjs');
+const {createAccountControls}=require('./account-window.cjs');
 const version=require('./package.json').version;
 
 app.setName('Codex SSH Desktop');
 app.setPath('userData',path.join(os.homedir(),'Library/Application Support/Codex SSH Desktop'));
 app.commandLine.appendSwitch('disable-background-networking');
 if(!app.requestSingleInstanceLock()){app.quit();return;}
-let window,settingsWindow,tunnel,token,viewerSession,config,connecting=false,quitting=false,retryTimer,checkingUpdates=false;
+let window,settingsWindow,tunnel,token,viewerSession,config,accountControls,connecting=false,quitting=false,retryTimer,checkingUpdates=false;
 const origin='http://127.0.0.1:18214';
 function log(message){
   const directory=app.getPath('userData');fs.mkdirSync(directory,{recursive:true,mode:0o700});
@@ -28,7 +29,7 @@ function execSSH(args){return execCommand('/usr/bin/ssh',['-o','BatchMode=yes','
 function portOpen(){return new Promise(resolve=>{const socket=net.connect({host:'127.0.0.1',port:18214});socket.once('connect',()=>{socket.destroy();resolve(true)});socket.once('error',()=>resolve(false));});}
 function stopTunnel(){if(tunnel){tunnel.removeAllListeners('exit');tunnel.kill();tunnel=null;}}
 async function connect(){
-  if(connecting||quitting)return;connecting=true;clearTimeout(retryTimer);
+  if(connecting||quitting||accountControls?.blocksConnection())return;connecting=true;clearTimeout(retryTimer);
   try{
     config=readConfig(app.getPath('userData'));
     if(!config){await status('Choose your remote computer','Open Connection → Settings to configure an SSH host.');showSettings();return;}
@@ -92,7 +93,7 @@ function requireSettingsSender(event){if(!settingsWindow||event.sender!==setting
 ipcMain.handle('connection-settings:read',event=>{requireSettingsSender(event);try{return readConfig(app.getPath('userData'))??{...defaults}}catch{return{...defaults}}});
 ipcMain.handle('connection-settings:save',async(event,input)=>{
   requireSettingsSender(event);
-  if(connecting)return{error:'A connection is in progress. Try again shortly.'};
+  if(connecting||accountControls?.blocksConnection())return{error:'A connection or account operation is in progress. Try again shortly.'};
   try{
     config=saveConfig(app.getPath('userData'),input);settingsWindow.close();
     clearTimeout(retryTimer);stopTunnel();await new Promise(resolve=>setTimeout(resolve,300));void connect();
@@ -100,7 +101,7 @@ ipcMain.handle('connection-settings:save',async(event,input)=>{
   }catch(error){return{error:error.message};}
 });
 app.on('login',(event,_contents,_details,authInfo,callback)=>{if(authInfo.isProxy&&authInfo.host==='127.0.0.1'&&authInfo.port===18215&&config){event.preventDefault();callback(config.proxyUsername,token||'')}});
-app.on('second-instance',()=>{window?.show();window?.focus()});
+app.on('second-instance',(_event,argv)=>{if(argv.includes('--accounts'))accountControls?.show();else{window?.show();window?.focus()}});
 app.on('before-quit',()=>{quitting=true;clearTimeout(retryTimer);stopTunnel()});
 app.on('window-all-closed',()=>app.quit());
 app.whenReady().then(async()=>{
@@ -114,12 +115,20 @@ app.whenReady().then(async()=>{
   window.webContents.on('did-fail-load',(_event,code,description,_url,isMainFrame)=>{if(isMainFrame)log(`Page load failed ${code}: ${description}`)});
   window.webContents.on('render-process-gone',(_event,details)=>log(`Viewer renderer exited: ${details.reason}`));
   window.webContents.on('did-finish-load',()=>log('Viewer page finished loading'));
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
+  accountControls=createAccountControls({userData:app.getPath('userData'),
+    getConfig:()=>readConfig(app.getPath('userData')),isConnecting:()=>connecting,
+    pauseConnection:()=>{clearTimeout(retryTimer);stopTunnel();void status('Switching the remote account','The remote operation continues over SSH. Open Accounts to follow its progress.');},
+    resumeConnection:()=>{setTimeout(()=>void connect(),0);},onMenuChanged:buildMenu});
+  function buildMenu(){Menu.setApplicationMenu(Menu.buildFromTemplate([
     {label:'Codex SSH Desktop',submenu:[{role:'about'},{label:'Check for Updates…',click:()=>void showUpdateCheck()},{type:'separator'},{role:'hide'},{role:'hideOthers'},{role:'unhide'},{type:'separator'},{role:'quit'}]},
     {label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},
     {label:'Connection',submenu:[{label:'Settings…',accelerator:'CmdOrCtrl+,',click:showSettings},{label:'Reconnect',accelerator:'CmdOrCtrl+Shift+R',click:()=>void connect()},{label:'Reload view',accelerator:'CmdOrCtrl+R',click:()=>window.reload()}]},
+    {label:'Accounts',submenu:accountControls.menu()},
     {label:'Window',submenu:[{role:'minimize'},{role:'zoom'},{role:'front'}]},
     {label:'Help',submenu:[{label:'Setup guide',click:()=>void shell.openExternal(`https://github.com/${repository}#readme`)},{label:'Releases',click:()=>void shell.openExternal(releasesUrl)}]},
-  ]));
+  ]));}
+  buildMenu();
+  if(process.argv.includes('--accounts'))accountControls.show();
+  await accountControls.restorePending();
   await connect();
 });

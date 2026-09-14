@@ -4,7 +4,7 @@ A separate macOS app that brings the Codex desktop interface to your computer
 while commands, files, tools, and the Codex account stay on your remote Mac.
 The interface renders locally; the connection uses your existing SSH alias.
 
-**Experimental 0.1 release.** Built from the community `codex-web` bridge.
+**Experimental 0.2 release.** Built from the community `codex-web` bridge.
 This is an independent project from DittoDub, not an official OpenAI app.
 
 [Download for macOS](https://github.com/RedAvocado/codex-ssh-desktop/releases/latest)
@@ -18,6 +18,9 @@ This is an independent project from DittoDub, not an official OpenAI app.
 - Remote file previews and external links opened in Chrome on the remote Mac.
 - **Codex SSH Desktop → Check for Updates…** checks GitHub releases and opens
   the download page when a newer client version is available.
+- **Accounts → Manage Accounts…** reads local and remote Codex Vitals profiles,
+  copies a local login over SSH, and switches the remote Codex account after
+  confirming that all remote Codex tasks will stop.
 
 The update checker is manual. It does not replace the client, update the remote
 Codex application, or restart running work. Checks go to GitHub from your local
@@ -46,7 +49,7 @@ Run these commands **on the remote Mac**:
 git clone https://github.com/RedAvocado/codex-ssh-desktop.git \
   ~/.local/share/codex-ssh-desktop
 cd ~/.local/share/codex-ssh-desktop
-git checkout v0.1.0
+git checkout v0.2.0
 npm ci
 npm run prepare:desktop -- /Applications/ChatGPT.app
 npm run build:browser
@@ -80,6 +83,51 @@ The client uses local ports **18214/18215**, forwarding to **18314/18315** on
 the remote loopback interface. Only one viewer can use these local ports at a
 time. The auxiliary host binds to loopback and requires a private session token.
 
+## Accounts and Codex Vitals
+
+Open **Accounts → Manage Accounts…** (⇧⌘A). The remote column lists captured
+Vitals accounts, previously copied accounts, and the active Codex login. Once
+loaded, remote accounts are also available directly in the Accounts menu.
+The local column reads the Codex Vitals profiles already on this Mac.
+
+- **Copy to remote** sends the selected account's access, refresh, and ID tokens
+  over SSH into a private account store. It does not activate the account or
+  stop tasks. Existing saved credentials are backed up; older credentials are
+  refused when a newer remote copy exists.
+- **Switch** always asks for confirmation. It backs up the active login, stops
+  this user's remote Codex app, engines, task subprocesses, and auxiliary viewer
+  runtime, installs the selected credentials, and relaunches the remote app.
+  The viewer then reconnects. **Stopped tasks must be resumed manually.**
+
+If you copy a newer login for the already active remote account, **Apply login**
+uses the same confirmed restart flow to activate those new credentials.
+
+Python 3 must be available at `/usr/bin/python3` on both Macs. No new OpenAI
+login is needed locally. Existing remote viewer installations can use these
+controls without rebuilding their copied desktop runtime: the client installs
+a small Python helper over SSH when the account list is opened.
+
+Vitals files are read from `~/Library/Application Support/CodexVitals/` without
+modifying Vitals or its accounts database. Copies, outgoing account snapshots,
+private backups, and operation status are stored remotely under
+`~/.local/share/codex-ssh-desktop/accounts/`. Credential files use mode `600` and
+private directories use mode `700`. Tokens travel through process stdin and
+never enter the Accounts renderer, command arguments, or application logs.
+
+The account worker continues if SSH disconnects. The client remembers a pending
+switch and checks its status before reconnecting. If activation fails after
+the credential change, it attempts to restore the previous account and relaunch
+Codex. If recovery itself fails, the Accounts window keeps the viewer disconnected
+and provides status and recovery controls. Account switching interrupts work;
+automatic credential rollback cannot resume that work.
+
+Only complete desktop OAuth profiles are supported. Capture incomplete accounts
+again in Vitals. A copied credential file is not proof of a valid login: Codex
+checks the login when it uses the account. Sharing a refresh-token pair between
+Macs can require a fresh login if one copy is rotated or invalidated. Capture
+fresh credentials in Vitals and copy again if this happens. Do not run another
+account switch or reopen a remote Codex client while a switch is in progress.
+
 ## How it works
 
 ```text
@@ -107,12 +155,18 @@ scenario is not yet verified.
 
 ## Current limits
 
-Native Electron dialogs, embedded browser tabs, notifications, account switching,
+Native Electron dialogs, embedded browser tabs, notifications,
 and complete computer-use parity need further verification or compatibility
 work. Task ownership and Resume Goal have targeted code tests, but complete
 live parity with the native app is not established. Queued-message deletion
 has passed isolated coordinator tests; an intermittent UI report remains
 unresolved. Some desktop integrity and telemetry requests can return HTTP 403.
+
+Account switching has synthetic credential, process, rollback, SSH-hangup, and
+Electron UI tests. Live Vitals catalog discovery and process preflight have been
+checked on macOS. A real account was not activated during development because
+the remote Mac had ongoing work; successful file activation and app relaunch
+do not by themselves establish that OpenAI accepts a saved refresh token.
 
 ## Operations and development
 
@@ -138,11 +192,15 @@ Local client development and packaging:
 ```sh
 npm ci
 npm test
+npm run test:accounts-ui
 npm start
 npm run package:mac
 ```
 
-`npm test` runs the TypeScript build, connection/update tests, and access checks.
+`npm test` runs the TypeScript build, connection/update/account tests, Python
+account recovery tests, and access checks. `test:accounts-ui` runs an isolated
+Electron window with synthetic accounts; it does not connect over SSH or read
+real credentials. It requires a graphical desktop.
 `npm run test:desktop` additionally requires a prepared supported application
 and exercises its actual copied coordinator code with synthetic messages.
 Packaging includes the client shell and Electron, excluding the copied Codex

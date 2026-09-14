@@ -18,7 +18,8 @@ if(fs.existsSync(app))fs.rmSync(app,{recursive:true});
 execFileSync('/usr/bin/ditto',[electronApp,app]);
 const resources=path.join(app,'Contents/Resources');
 fs.rmSync(path.join(resources,'default_app.asar'),{force:true});
-fs.cpSync(path.join(root,'viewer'),path.join(resources,'app'),{recursive:true});
+fs.cpSync(path.join(root,'viewer'),path.join(resources,'app'),{recursive:true,
+  filter:source=>!source.split(path.sep).includes('__pycache__')&&!source.endsWith('.pyc')});
 fs.copyFileSync(path.join(root,'LICENSE'),path.join(resources,'PROJECT-LICENSE.txt'));
 fs.copyFileSync(path.join(root,'THIRD_PARTY_NOTICES.md'),path.join(resources,'THIRD-PARTY-NOTICES.txt'));
 for(const file of ['LICENSE','LICENSES.chromium.html']){
