@@ -13,12 +13,21 @@ function compareVersions(a,b){
   for(let i=0;i<3;i++)if(left[i]!==right[i])return left[i]>right[i]?1:-1;
   return 0;
 }
-function validateRelease(release){
+function validateRelease(release,arch=process.arch){
   if(!release||release.draft||release.prerelease||!parseVersion(release.tag_name))throw Error('GitHub returned an invalid stable release.');
   // Derive the URL locally rather than following links supplied in API content.
-  return {version:release.tag_name.replace(/^v/,''),url:`${releasesUrl}/tag/${release.tag_name}`};
+  const version=release.tag_name.replace(/^v/,'');
+  const name=`Codex-SSH-Desktop-${version}-macos-${arch}.zip`;
+  const matches=Array.isArray(release.assets)?release.assets.filter(asset=>asset.name===name):[];
+  const candidate=matches.length===1?matches[0]:null;
+  const asset=['arm64','x64'].includes(arch)&&candidate?.state==='uploaded'&&
+    Number.isSafeInteger(candidate.size)&&candidate.size>0&&candidate.size<=1024**3&&
+    /^sha256:[a-f0-9]{64}$/.test(candidate.digest||'')
+    ?{name,size:candidate.size,sha256:candidate.digest.slice(7),
+      url:`https://github.com/${repository}/releases/download/${release.tag_name}/${name}`}:null;
+  return {version,url:`${releasesUrl}/tag/${release.tag_name}`,asset};
 }
-async function checkForUpdates(currentVersion,{fetchImpl=fetch,readPrivateRelease}={}){
+async function checkForUpdates(currentVersion,{fetchImpl=fetch,readPrivateRelease,arch=process.arch}={}){
   let response;
   try{
     response=await fetchImpl(`https://api.github.com/repos/${repository}/releases/latest`,{
@@ -35,7 +44,7 @@ async function checkForUpdates(currentVersion,{fetchImpl=fetch,readPrivateReleas
     throw Error('GitHub temporarily limited update checks. Please try again later.');
   }else if(!response.ok){throw Error(`GitHub update check failed (HTTP ${response.status}).`);}
   else {try{raw=await response.json();}catch{throw Error('GitHub returned an unreadable release response.');}}
-  const release=validateRelease(raw);
+  const release=validateRelease(raw,arch);
   return {...release,currentVersion,status:compareVersions(release.version,currentVersion)>0?'available':'current'};
 }
 module.exports={repository,releasesUrl,parseVersion,compareVersions,validateRelease,checkForUpdates};

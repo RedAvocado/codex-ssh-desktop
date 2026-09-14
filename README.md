@@ -4,7 +4,7 @@ A separate macOS app that brings the Codex desktop interface to your computer
 while commands, files, tools, and the Codex account stay on your remote Mac.
 The interface renders locally; the connection uses your existing SSH alias.
 
-**Experimental 0.3 release.** Built from the community `codex-web` bridge.
+**Experimental 0.4 release.** Built from the community `codex-web` bridge.
 This is an independent project from DittoDub, not an official OpenAI app.
 
 [Download for macOS](https://github.com/RedAvocado/codex-ssh-desktop/releases/latest)
@@ -16,15 +16,32 @@ This is an independent project from DittoDub, not an official OpenAI app.
 - SSH transport with automatic reconnection.
 - Your existing remote Codex login, task history, and projects.
 - Remote file previews and external links opened in Chrome on the remote Mac.
-- **Codex SSH Desktop → Check for Updates…** checks GitHub releases and opens
-  the download page when a newer client version is available.
+- **Codex SSH Desktop → Check for Updates…** checks GitHub releases, downloads
+  a newer client inside the app, and offers **Install and Restart**.
 - **Accounts → Manage Accounts…** reads local and remote Codex Vitals profiles,
   copies a local login over SSH, and switches the remote Codex account after
   confirming that all remote Codex tasks will stop.
 
-The update checker is manual. It does not replace the client, update the remote
-Codex application, or restart running work. Checks go to GitHub from your local
-computer and do not include your SSH configuration or Codex credentials.
+Updates start when you choose **Check for Updates…**. Choose **Download Update**,
+then **Install and Restart** when ready. The local viewer replaces itself in its
+current location and reconnects over SSH. Remote Codex and its tasks stay running;
+connection settings and accounts are preserved. Closing the Updates window after
+a download lets you keep working and install later in the same app session.
+
+Downloads are full app ZIPs from this repository's GitHub releases. The client
+checks GitHub's SHA256 digest, bundle identity, version, architecture, and macOS
+code signature before installation. It keeps the previous app in a private
+`.codex-ssh-update-*` directory beside the installed app and restores it if
+replacement or startup fails. `last-update.json` in the client's Application
+Support folder records the result and backup location. Backups remain available
+for manual recovery. The app's installation folder must be writable; no admin
+helper is installed. Releases without a verified build for your Mac retain the
+manual release-page option. Private release downloads may require that option.
+
+Checks and downloads go to GitHub from your local computer and do not include
+your SSH configuration or Codex credentials. The updater does not modify remote
+Codex or its compatibility bridge. Version 0.3 and earlier need one manual
+installation of 0.4 or later to gain in-app installation.
 
 ## Compatibility
 
@@ -204,6 +221,7 @@ Local client development and packaging:
 npm ci
 npm test
 npm run test:accounts-ui
+npm run test:updates-ui
 npm start
 npm run package:mac
 ```
@@ -211,7 +229,8 @@ npm run package:mac
 `npm test` runs the TypeScript build, connection/update/account tests, Python
 account recovery tests, and access checks. `test:accounts-ui` runs an isolated
 Electron window with synthetic accounts; it does not connect over SSH or read
-real credentials. It requires a graphical desktop.
+real credentials. `test:updates-ui` checks update progress, cancellation, deferred installation,
+and restart handoff with synthetic releases. Both require a graphical desktop.
 `npm run test:desktop` additionally requires a prepared supported application
 and exercises its actual copied coordinator code with synthetic messages.
 Packaging includes the client shell and Electron, excluding the copied Codex

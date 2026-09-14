@@ -30,6 +30,7 @@ const plist=path.join(app,'Contents/Info.plist');
 for(const [key,value] of Object.entries({CFBundleName:name,CFBundleDisplayName:name,CFBundleIdentifier:'com.dittodub.codex-ssh-desktop',CFBundleIconFile:'codex-ssh-desktop.icns',CFBundleShortVersionString:version,CFBundleVersion:version,NSHumanReadableCopyright:'Copyright 2026 Codex SSH Desktop contributors'}))execFileSync('/usr/bin/plutil',['-replace',key,'-string',value,plist]);
 execFileSync('/usr/bin/codesign',['--force','--deep','--sign','-',app],{stdio:'inherit'});
 execFileSync('/usr/bin/codesign',['--verify','--deep','--strict',app],{stdio:'inherit'});
+await require('../viewer/update-install.cjs').validateBundle(app,version);
 const zip=path.join(out,`Codex-SSH-Desktop-${version}-macos-${process.arch}.zip`);
 fs.rmSync(zip,{force:true});
 execFileSync('/usr/bin/ditto',['-c','-k','--sequesterRsrc','--keepParent',app,zip]);

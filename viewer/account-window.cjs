@@ -3,7 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const {AccountsClient} = require('./accounts.cjs');
 
-function createAccountControls({userData, getConfig, isConnecting, pauseConnection, resumeConnection, onMenuChanged}) {
+function createAccountControls({userData, getConfig, isConnecting, pauseConnection, resumeConnection, onMenuChanged, operationsBlocked = () => false}) {
   let window, client, busy = false, blocked = fs.existsSync(path.join(userData, 'pending-account-switch.json'));
   let catalog, progress = '', lastError = '', recoveryRequired = false;
   function getClient() {
@@ -62,7 +62,7 @@ function createAccountControls({userData, getConfig, isConnecting, pauseConnecti
     if (!blocked) await refresh();
   }
   async function operate(kind, id) {
-    if (busy || blocked || (kind === 'switch' && isConnecting())) {
+    if (busy || blocked || operationsBlocked() || (kind === 'switch' && isConnecting())) {
       lastError = 'Wait for the current connection or account operation to finish.';
       publish();
       throw Error(lastError);

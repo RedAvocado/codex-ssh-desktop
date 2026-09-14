@@ -5,7 +5,10 @@ const fs=require('node:fs');
 const os=require('node:os');
 const net=require('node:net');
 const {defaults,readConfig,saveConfig,remoteCommand}=require('./config.cjs');
-const {checkForUpdates,repository,releasesUrl}=require('./updates.cjs');
+const {repository,releasesUrl}=require('./updates.cjs');
+const {createUpdateControls}=require('./update-window.cjs');
+const {acknowledgeUpdate}=require('./update-helper.cjs');
+const {installedBundle}=require('./update-install.cjs');
 const {createAccountControls}=require('./account-window.cjs');
 const version=require('./package.json').version;
 
@@ -13,7 +16,7 @@ app.setName('Codex SSH Desktop');
 app.setPath('userData',path.join(os.homedir(),'Library/Application Support/Codex SSH Desktop'));
 app.commandLine.appendSwitch('disable-background-networking');
 if(!app.requestSingleInstanceLock()){app.quit();return;}
-let window,settingsWindow,tunnel,token,viewerSession,config,accountControls,connecting=false,quitting=false,retryTimer,checkingUpdates=false;
+let window,settingsWindow,tunnel,token,viewerSession,config,accountControls,updateControls,connecting=false,quitting=false,retryTimer;
 const origin='http://127.0.0.1:18214';
 function log(message){
   const directory=app.getPath('userData');fs.mkdirSync(directory,{recursive:true,mode:0o700});
@@ -60,27 +63,6 @@ async function openRemote(url){
     if(!result.ok)throw Error(`Remote browser returned HTTP ${result.status}`);
   }catch(error){log(`Could not open remote link: ${error.message}`);}
 }
-async function showUpdateCheck(){
-  if(checkingUpdates)return;checkingUpdates=true;
-  try{
-    const result=await checkForUpdates(version,{
-      readPrivateRelease:async()=>{
-        const candidates=['/opt/homebrew/bin/gh','/usr/local/bin/gh'];
-        const gh=candidates.find(file=>fs.existsSync(file));
-        if(!gh)throw Error('GitHub CLI is unavailable');
-        return JSON.parse(await execCommand(gh,['api',`repos/${repository}/releases/latest`],12000));
-      },
-    });
-    log(`Update check: ${result.status}; installed=${version}; latest=${result.version??'unavailable'}`);
-    const newer=result.status==='available',unavailable=result.status==='unavailable';
-    const {response}=await dialog.showMessageBox(window,{type:'info',title:'Check for Updates',
-      message:newer?`Codex SSH Desktop ${result.version} is available`:unavailable?'No published release is available':'You’re up to date',
-      detail:newer?`You have ${version}. Open the release page to download the update. Install it when you are ready.`:unavailable?`Installed version: ${version}.`:`Codex SSH Desktop ${version} is installed.`,
-      buttons:newer||unavailable?['Open release page','Later']:['OK'],defaultId:0,cancelId:newer||unavailable?1:0});
-    if((newer||unavailable)&&response===0)await shell.openExternal(result.url);
-  }catch(error){log(`Update check failed: ${error.message}`);await dialog.showMessageBox(window,{type:'warning',title:'Check for Updates',message:'Could not check for updates',detail:error.message,buttons:['OK']});}
-  finally{checkingUpdates=false;}
-}
 function showSettings(){
   if(settingsWindow&&!settingsWindow.isDestroyed()){settingsWindow.focus();return;}
   settingsWindow=new BrowserWindow({width:550,height:665,resizable:true,minWidth:500,minHeight:570,title:'Connection settings',backgroundColor:'#15191b',webPreferences:{preload:path.join(__dirname,'settings-preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}});
@@ -102,7 +84,7 @@ ipcMain.handle('connection-settings:save',async(event,input)=>{
 });
 app.on('login',(event,_contents,_details,authInfo,callback)=>{if(authInfo.isProxy&&authInfo.host==='127.0.0.1'&&authInfo.port===18215&&config){event.preventDefault();callback(config.proxyUsername,token||'')}});
 app.on('second-instance',(_event,argv)=>{if(argv.includes('--accounts'))accountControls?.show();else{window?.show();window?.focus()}});
-app.on('before-quit',()=>{quitting=true;clearTimeout(retryTimer);stopTunnel()});
+app.on('before-quit',()=>{quitting=true;clearTimeout(retryTimer);stopTunnel();updateControls?.beforeQuit()});
 app.on('window-all-closed',()=>app.quit());
 app.whenReady().then(async()=>{
   app.setAboutPanelOptions({applicationName:'Codex SSH Desktop',applicationVersion:version,credits:'Independent community project. Not affiliated with OpenAI.'});
@@ -116,11 +98,17 @@ app.whenReady().then(async()=>{
   window.webContents.on('render-process-gone',(_event,details)=>log(`Viewer renderer exited: ${details.reason}`));
   window.webContents.on('did-finish-load',()=>log('Viewer page finished loading'));
   accountControls=createAccountControls({userData:app.getPath('userData'),
-    getConfig:()=>readConfig(app.getPath('userData')),isConnecting:()=>connecting,
+    getConfig:()=>readConfig(app.getPath('userData')),isConnecting:()=>connecting,operationsBlocked:()=>updateControls?.blocksAccounts(),
     pauseConnection:()=>{clearTimeout(retryTimer);stopTunnel();void status('Switching the remote account','The remote operation continues over SSH. Open Accounts to follow its progress.');},
     resumeConnection:()=>{setTimeout(()=>void connect(),0);},onMenuChanged:buildMenu});
+  updateControls=createUpdateControls({version,userData:app.getPath('userData'),blocksInstall:()=>accountControls.blocksConnection(),
+    readPrivateRelease:async()=>{
+      const gh=['/opt/homebrew/bin/gh','/usr/local/bin/gh'].find(file=>fs.existsSync(file));
+      if(!gh)throw Error('GitHub CLI is unavailable');
+      return JSON.parse(await execCommand(gh,['api',`repos/${repository}/releases/latest`],12000));
+    }});
   function buildMenu(){Menu.setApplicationMenu(Menu.buildFromTemplate([
-    {label:'Codex SSH Desktop',submenu:[{role:'about'},{label:'Check for Updates…',click:()=>void showUpdateCheck()},{type:'separator'},{role:'hide'},{role:'hideOthers'},{role:'unhide'},{type:'separator'},{role:'quit'}]},
+    {label:'Codex SSH Desktop',submenu:[{role:'about'},{label:'Check for Updates…',click:()=>updateControls.show()},{type:'separator'},{role:'hide'},{role:'hideOthers'},{role:'unhide'},{type:'separator'},{role:'quit'}]},
     {label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},
     {label:'Connection',submenu:[{label:'Settings…',accelerator:'CmdOrCtrl+,',click:showSettings},{label:'Reconnect',accelerator:'CmdOrCtrl+Shift+R',click:()=>void connect()},{label:'Reload view',accelerator:'CmdOrCtrl+R',click:()=>window.reload()}]},
     {label:'Accounts',submenu:accountControls.menu()},
@@ -128,6 +116,8 @@ app.whenReady().then(async()=>{
     {label:'Help',submenu:[{label:'Setup guide',click:()=>void shell.openExternal(`https://github.com/${repository}#readme`)},{label:'Releases',click:()=>void shell.openExternal(releasesUrl)}]},
   ]));}
   buildMenu();
+  // The bundle retains Electron's executable name; determine its location directly.
+  try{await acknowledgeUpdate({userData:app.getPath('userData'),version,target:installedBundle()});}catch(error){log(`Update recovery: ${error.message}`);}
   if(process.argv.includes('--accounts'))accountControls.show();
   await accountControls.restorePending();
   await connect();

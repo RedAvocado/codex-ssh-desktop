@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {compareVersions,checkForUpdates,repository}=require('../viewer/updates.cjs');
+const {compareVersions,checkForUpdates,repository,validateRelease}=require('../viewer/updates.cjs');
 const release=tag=>({tag_name:tag,draft:false,prerelease:false,html_url:'https://untrusted.example/download'});
 const fetchRelease=tag=>async()=>({status:200,ok:true,json:async()=>release(tag)});
 test('numeric version comparison handles multi-digit versions',()=>{
@@ -26,4 +26,13 @@ test('network errors, rate limits, invalid JSON and unexpected tags fail honestl
   await assert.rejects(checkForUpdates('0.1.0',{fetchImpl:async()=>({status:403})}),/limited/);
   await assert.rejects(checkForUpdates('0.1.0',{fetchImpl:async()=>({status:200,ok:true,json:async()=>{throw Error()}})}),/unreadable/);
   for(const tag of ['v2.0.0-beta.1','latest','../../elsewhere'])await assert.rejects(checkForUpdates('0.1.0',{fetchImpl:fetchRelease(tag)}),/invalid/);
+});
+test('only a unique uploaded asset matching this Mac with a GitHub digest enables installation',()=>{
+  const asset={name:'Codex-SSH-Desktop-0.4.0-macos-arm64.zip',state:'uploaded',size:123,digest:'sha256:'+'a'.repeat(64),browser_download_url:'https://untrusted.example/evil'};
+  const raw={...release('v0.4.0'),assets:[asset]};
+  assert.equal(validateRelease(raw,'arm64').asset.url,`https://github.com/${repository}/releases/download/v0.4.0/${asset.name}`);
+  assert.equal(validateRelease(raw,'x64').asset,null);
+  for(const bad of [{digest:null},{size:0},{size:1024**3+1},{state:'new'}])
+    assert.equal(validateRelease({...raw,assets:[{...asset,...bad}]},'arm64').asset,null);
+  assert.equal(validateRelease({...raw,assets:[asset,asset]},'arm64').asset,null);
 });
