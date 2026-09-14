@@ -49,7 +49,7 @@ Run these commands **on the remote Mac**:
 git clone https://github.com/RedAvocado/codex-ssh-desktop.git \
   ~/.local/share/codex-ssh-desktop
 cd ~/.local/share/codex-ssh-desktop
-git checkout v0.2.0
+git checkout v0.2.1
 npm ci
 npm run prepare:desktop -- /Applications/ChatGPT.app
 npm run build:browser
@@ -85,10 +85,12 @@ time. The auxiliary host binds to loopback and requires a private session token.
 
 ## Accounts and Codex Vitals
 
-Open **Accounts → Manage Accounts…** (⇧⌘A). The remote column lists captured
-Vitals accounts, previously copied accounts, and the active Codex login. Once
-loaded, remote accounts are also available directly in the Accounts menu.
-The local column reads the Codex Vitals profiles already on this Mac.
+Open **Accounts → Manage Accounts…** (⇧⌘A). Each account appears once, with an
+indicator showing whether it is available locally, remotely, or on both Macs.
+The list combines Vitals profiles, previously copied accounts, and the active
+Codex login. Copy and Switch controls stay together on the account's row.
+Distinct workspace identities remain separate even if they share an email.
+Once loaded, remote accounts are also available directly in the Accounts menu.
 
 - **Copy to remote** sends the selected account's access, refresh, and ID tokens
   over SSH into a private account store. It does not activate the account or

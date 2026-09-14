@@ -16,27 +16,52 @@ function render(state) {
   $('#recovery').hidden = !state.recoveryRequired;
   $('#recovery').disabled = state.busy || awaiting;
   $('#host').textContent = state.catalog?.host || 'SSH';
+  const container = $('#accounts'), errors = $('#catalog-errors');
+  container.replaceChildren(); errors.replaceChildren();
+  const rows = accountRows(state.catalog);
+  $('#count').textContent = state.catalog ? `(${rows.length})` : '';
+  if (!state.catalog) { container.append(text('p', 'Loading accounts…', 'empty')); return; }
   for (const side of ['remote', 'local']) {
-    const container = $(`#${side}`), data = state.catalog?.[side];
-    container.replaceChildren();
-    if (!data) { container.append(text('p', 'Loading accounts…', 'empty')); continue; }
-    if (data.error) container.append(text('p', data.error, 'empty'));
-    if (!data.error && !data.accounts.length) container.append(text('p', side === 'local'
-      ? 'No desktop OAuth profiles found. Capture an account in Codex Vitals, then refresh.'
-      : 'No saved accounts found. Copy one from this Mac to get started.', 'empty'));
-    for (const account of data.accounts) {
-      const card = text('article', '', 'account');
-      card.append(text('p', account.name, 'name'), text('p', account.email, 'email'),
-        text('p', `Workspace ${account.accountId}`, 'workspace'));
-      const actions = text('div', '', 'account-actions');
-      const expired = account.expiresAt > 0 && account.expiresAt * 1000 < Date.now();
-      actions.append(text('span', expired ? 'Access token expired' : account.active ? side === 'remote' ? 'Active remotely' : 'Active locally' : 'Saved account', `expiry${expired ? ' expired' : ''}`));
-      const button = text('button', side === 'local' ? 'Copy to remote' : account.needsActivation ? 'Apply login' : account.active ? 'Active' : 'Switch');
-      button.disabled = disabled || (side === 'remote' && account.active && !account.needsActivation);
-      button.addEventListener('click', () => perform(() => side === 'local' ? window.accounts.copy(account.id) : window.accounts.switch(account.id)));
-      actions.append(button); card.append(actions); container.append(card);
+    const data = state.catalog[side], label = side === 'remote' ? 'Remote Mac' : 'This Mac';
+    if (data?.error) errors.append(text('p', `${label}: ${data.error}`, 'empty'));
+    if (data?.skipped) errors.append(text('p', `${label}: ${data.skipped} incomplete or unsupported profile(s) were skipped. Capture them again in Codex Vitals.`, 'empty'));
+  }
+  if (!rows.length) container.append(text('p', 'No desktop OAuth profiles found. Capture an account in Codex Vitals, then refresh.', 'empty'));
+  for (const row of rows) {
+    const card = text('article', '', 'account'); card.dataset.accountId = row.id;
+    const details = text('div', '', 'account-details');
+    details.append(text('p', row.name, 'name'));
+    if (row.hasAlias) details.append(text('p', row.email, 'email'));
+    if (row.showWorkspace) details.append(text('p', `Workspace ${row.accountId}`, 'workspace'));
+    const availability = text('div', '', 'availability');
+    const location = row.local && row.remote ? 'On both Macs' : row.remote
+      ? state.catalog.local?.error ? 'On remote · local unavailable' : 'Remote only'
+      : state.catalog.remote?.error ? 'On this Mac · remote unavailable' : 'This Mac only';
+    availability.append(text('span', location, 'location'));
+    const active = row.local?.active && row.remote?.active ? 'Active on both Macs'
+      : row.remote?.active ? 'Active remotely' : row.local?.active ? 'Active locally' : '';
+    if (active) availability.append(text('span', active, 'active-label'));
+    details.append(availability);
+    for (const side of ['remote', 'local']) {
+      const account = row[side];
+      if (account?.expiresAt > 0 && account.expiresAt * 1000 < Date.now())
+        details.append(text('p', `${side === 'remote' ? 'Remote' : 'Local'} access token expired`, 'expiry expired'));
     }
-    if (data.skipped) container.append(text('p', `${data.skipped} incomplete or unsupported profile(s) were skipped. Capture them again in Codex Vitals.`, 'empty'));
+    const actions = text('div', '', 'account-actions');
+    if (row.local) {
+      const copy = text('button', 'Copy to remote', 'secondary'); copy.dataset.action = 'copy';
+      copy.disabled = disabled;
+      copy.addEventListener('click', () => perform(() => window.accounts.copy(row.local.id)));
+      actions.append(copy);
+    }
+    if (row.remote) {
+      const account = row.remote;
+      const button = text('button', account.needsActivation ? 'Apply login' : account.active ? 'Active' : 'Switch'); button.dataset.action = 'switch';
+      button.disabled = disabled || (account.active && !account.needsActivation);
+      button.addEventListener('click', () => perform(() => window.accounts.switch(account.id)));
+      actions.append(button);
+    }
+    card.append(details, actions); container.append(card);
   }
 }
 async function perform(operation) {
