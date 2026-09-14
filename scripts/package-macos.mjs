@@ -22,11 +22,12 @@ fs.cpSync(path.join(root,'viewer'),path.join(resources,'app'),{recursive:true,
   filter:source=>!source.split(path.sep).includes('__pycache__')&&!source.endsWith('.pyc')});
 fs.copyFileSync(path.join(root,'LICENSE'),path.join(resources,'PROJECT-LICENSE.txt'));
 fs.copyFileSync(path.join(root,'THIRD_PARTY_NOTICES.md'),path.join(resources,'THIRD-PARTY-NOTICES.txt'));
+fs.copyFileSync(path.join(root,'assets/codex-ssh-desktop.icns'),path.join(resources,'codex-ssh-desktop.icns'));
 for(const file of ['LICENSE','LICENSES.chromium.html']){
  const source=path.join(path.dirname(electronApp),file);if(fs.existsSync(source))fs.copyFileSync(source,path.join(resources,file));
 }
 const plist=path.join(app,'Contents/Info.plist');
-for(const [key,value] of Object.entries({CFBundleName:name,CFBundleDisplayName:name,CFBundleIdentifier:'com.dittodub.codex-ssh-desktop',CFBundleShortVersionString:version,CFBundleVersion:version,NSHumanReadableCopyright:'Copyright 2026 Codex SSH Desktop contributors'}))execFileSync('/usr/bin/plutil',['-replace',key,'-string',value,plist]);
+for(const [key,value] of Object.entries({CFBundleName:name,CFBundleDisplayName:name,CFBundleIdentifier:'com.dittodub.codex-ssh-desktop',CFBundleIconFile:'codex-ssh-desktop.icns',CFBundleShortVersionString:version,CFBundleVersion:version,NSHumanReadableCopyright:'Copyright 2026 Codex SSH Desktop contributors'}))execFileSync('/usr/bin/plutil',['-replace',key,'-string',value,plist]);
 execFileSync('/usr/bin/codesign',['--force','--deep','--sign','-',app],{stdio:'inherit'});
 execFileSync('/usr/bin/codesign',['--verify','--deep','--strict',app],{stdio:'inherit'});
 const zip=path.join(out,`Codex-SSH-Desktop-${version}-macos-${process.arch}.zip`);
