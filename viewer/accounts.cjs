@@ -53,11 +53,25 @@ function publicCatalog(value) {
       return {id: item.id, name: string('name'), email: string('email'), accountId: string('accountId'),
         active: item.active === true, needsActivation: item.needsActivation === true,
         expiresAt: Number.isFinite(item.expiresAt) ? item.expiresAt : 0,
+        usage: publicUsage(item.usage),
         sources: Array.isArray(item.sources) ? item.sources.filter(v => typeof v === 'string').map(v => v.slice(0, 80)) : []};
     }),
     skipped: Number.isInteger(value.skipped) ? value.skipped : 0,
     vitalsInstalled: value.vitalsInstalled === true,
   };
+}
+
+function publicUsage(usage) {
+  const observedAt = Number.isFinite(usage?.observedAt) && usage.observedAt > 0 ? usage.observedAt : null;
+  const windows = Array.isArray(usage?.windows) ? usage.windows.filter(window =>
+    Number.isFinite(window.limitSeconds) && window.limitSeconds > 0 && window.limitSeconds <= 366 * 86400
+    && Number.isFinite(window.remainingPercent)).map(window => ({
+      limitSeconds: window.limitSeconds,
+      remainingPercent: Math.min(100, Math.max(0, window.remainingPercent)),
+      resetsAt: Number.isFinite(window.resetsAt) && window.resetsAt > 0 ? window.resetsAt : null,
+    })) : [];
+  return {status: usage?.status === 'error' ? 'error' : usage?.status === 'available' && observedAt && windows.length ? 'available' : 'unavailable',
+    observedAt, windows: usage?.status === 'available' ? windows : []};
 }
 
 class AccountsClient {
@@ -153,4 +167,4 @@ class AccountsClient {
   }
 }
 
-module.exports = {AccountsClient, privateCommand, publicCatalog, parseResponse};
+module.exports = {AccountsClient, privateCommand, publicCatalog, publicUsage, parseResponse};

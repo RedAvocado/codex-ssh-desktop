@@ -17,6 +17,10 @@ function accountRows(catalog) {
       && account.name.trim().toLowerCase() !== account.email.trim().toLowerCase());
     row.name = alias?.name || row.email;
     row.hasAlias = row.name.trim().toLowerCase() !== row.email.trim().toLowerCase();
+    const snapshots = ['local', 'remote'].filter(side => row[side]?.usage)
+      .map(side => ({...row[side].usage, source: side})).sort((a, b) => (b.observedAt || 0) - (a.observedAt || 0));
+    row.usage = snapshots.find(snapshot => snapshot.status === 'available' && snapshot.windows?.length)
+      || snapshots[0] || {status: 'unavailable', observedAt: null, windows: []};
     const key = row.email.trim().toLowerCase();
     emails.set(key, (emails.get(key) || 0) + 1);
   }

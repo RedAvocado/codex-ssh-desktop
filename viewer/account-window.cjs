@@ -24,7 +24,7 @@ function createAccountControls({userData, getConfig, isConnecting, pauseConnecti
   }
   function show() {
     if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
-    window = new BrowserWindow({width: 890, height: 760, minWidth: 690, minHeight: 560,
+    window = new BrowserWindow({width: 890, height: 940, minWidth: 690, minHeight: 560,
       title: 'Accounts · Codex SSH Desktop', backgroundColor: '#15191b',
       webPreferences: {preload: path.join(__dirname, 'accounts-preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true}});
     window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));

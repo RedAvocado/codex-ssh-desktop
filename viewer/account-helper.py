@@ -10,6 +10,7 @@ import datetime
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -125,6 +126,58 @@ def freshness(auth):
     return (float(item['issuedAt'] or 0), refreshed, float(item['expiresAt'] or 0))
 
 
+def number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def usage_snapshot(snapshot):
+    """Read only Vitals' reported windows; never invent a missing 5-hour quota.
+
+    resetAfterSeconds is relative to when Vitals fetched the snapshot, not when
+    this viewer reads it. An elapsed reset is not evidence of replenished quota.
+    """
+    observed = snapshot.get('lastRefreshEpoch')
+    if not number(observed) or observed <= 0 or observed > time.time() + 300:
+        return {}
+    results = {}
+    accounts = snapshot.get('accounts', [])
+    if not isinstance(accounts, list):
+        return results
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        email, separator, workspace = str(account.get('id', '')).partition('|')
+        email = email.strip().lower()
+        if not separator or not workspace or email != str(account.get('email', '')).strip().lower():
+            continue
+        result = {'status': 'error' if account.get('hasError') is True else 'unavailable',
+                  'observedAt': observed, 'windows': []}
+        if not account.get('hasError'):
+            raw_windows = account.get('quotaWindows')
+            if raw_windows is None:
+                raw_windows = [
+                    {'limitSeconds': seconds, 'remainingPercent': account.get(percent),
+                     'resetAfterSeconds': account.get(reset)}
+                    for seconds, percent, reset in [(18000, 'sessionFree', 'sessionResetSeconds'),
+                                                    (604800, 'weeklyFree', 'weeklyResetSeconds')]]
+            if isinstance(raw_windows, list):
+                windows = {}
+                for window in raw_windows:
+                    if not isinstance(window, dict):
+                        continue
+                    duration, remaining, reset = (window.get(k) for k in ('limitSeconds', 'remainingPercent', 'resetAfterSeconds'))
+                    if not number(duration) or not 0 < duration <= 366 * 86400 or not number(remaining):
+                        continue
+                    resets = observed + reset if number(reset) and 0 < reset <= 366 * 86400 else None
+                    windows[duration] = {'limitSeconds': duration, 'remainingPercent': min(100, max(0, remaining)),
+                                         'resetsAt': resets}
+                result['windows'] = [windows[key] for key in sorted(windows)]
+                if result['windows']:
+                    result['status'] = 'available'
+        results[(email, workspace)] = result
+    return results
+
+
 class Store:
     def __init__(self, home=None):
         self.home = Path(home or Path.home())
@@ -223,7 +276,15 @@ class Store:
     def list(self):
         catalog, skipped = self.catalog()
         fields = ('id', 'name', 'email', 'accountId', 'expiresAt', 'active', 'needsActivation', 'sources')
-        return {'accounts': [{k: item[k] for k in fields} for item in catalog.values()],
+        usage = {}
+        try:
+            usage = usage_snapshot(read_json(self.vitals / 'accounts-snapshot.json'))
+        except (OSError, ValueError, AccountError):
+            pass
+        return {'accounts': [{**{k: item[k] for k in fields},
+                              'usage': usage.get((item['email'], item['accountId']),
+                                                 {'status': 'unavailable', 'observedAt': None, 'windows': []})}
+                             for item in catalog.values()],
                 'skipped': skipped, 'vitalsInstalled': self.vitals.exists()}
 
     def selected(self, key):

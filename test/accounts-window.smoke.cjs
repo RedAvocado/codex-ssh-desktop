@@ -14,6 +14,8 @@ const fixture = Array.from({length: 4}, (_, index) => ({
   id: String(index + 1).repeat(64), name: ['Personal', 'account2@example.test', 'Research', '<img src=x>'][index],
   email: `account${index + 1}@example.test`, accountId: `workspace-${index + 1}`,
   active: index === 0, expiresAt: index === 3 ? 1 : 9999999999, sources: ['Codex Vitals'],
+  usage: {status: 'available', observedAt: Date.now() / 1000 - 120,
+    windows: [{limitSeconds: 604800, remainingPercent: [100, 8, 54, 0][index], resetsAt: Date.now() / 1000 + 3600}]},
 }));
 class FakeClient {
   constructor(config) { this.config = config; }
@@ -42,6 +44,9 @@ app.whenReady().then(async () => {
   const window = BrowserWindow.getAllWindows()[0];
   await waitFor(window, 'document.querySelectorAll(".account").length === 4');
   assert.equal(await window.webContents.executeJavaScript('document.querySelectorAll(".account")[1].textContent.split("account2@example.test").length - 1'), 1);
+  assert.equal(await window.webContents.executeJavaScript('document.querySelectorAll(".usage-window").length'), 4);
+  assert.match(await window.webContents.executeJavaScript('document.querySelectorAll(".account")[1].textContent'), /8% left/);
+  assert.match(await window.webContents.executeJavaScript('document.querySelector(".usage-reset").textContent'), /Resets/);
   await window.webContents.executeJavaScript('document.querySelector("#refresh").click()');
   await waitFor(window, '!document.querySelector("#refresh").disabled');
   assert.equal(await window.webContents.executeJavaScript('document.querySelectorAll(".account").length'), 4);

@@ -83,6 +83,48 @@ class AccountsTests(unittest.TestCase):
         for secret in ['access_token', 'refresh_token', 'id_token', 'synthetic-refresh', 'signature']:
             self.assertNotIn(secret, serialized)
 
+    def test_usage_uses_snapshot_time_and_exact_reported_windows(self):
+        observed = 1789400000
+        snapshot = {'lastRefreshEpoch': observed, 'accounts': [{
+            'id': 'first@example.test|workspace-a', 'email': 'first@example.test', 'hasError': False,
+            'sessionFree': 100, 'sessionResetSeconds': 0,
+            'quotaWindows': [{'limitSeconds': 604800, 'remainingPercent': 8, 'resetAfterSeconds': 3600}]}]}
+        helper.atomic_json(self.store.vitals / 'accounts-snapshot.json', snapshot)
+        listed = self.store.list()['accounts']
+        reading = next(a['usage'] for a in listed if a['email'] == 'first@example.test')
+        self.assertEqual(reading['status'], 'available')
+        self.assertEqual(reading['observedAt'], observed)
+        self.assertEqual(reading['windows'], [{'limitSeconds': 604800, 'remainingPercent': 8, 'resetsAt': observed + 3600}])
+        self.assertEqual(next(a['usage']['status'] for a in listed if a['email'] == 'second@example.test'), 'unavailable')
+
+    def test_usage_cannot_match_another_workspace_with_the_same_email(self):
+        snapshot = {'lastRefreshEpoch': 1789400000, 'accounts': [{
+            'id': 'first@example.test|another-workspace', 'email': 'first@example.test', 'hasError': False,
+            'quotaWindows': [{'limitSeconds': 604800, 'remainingPercent': 8, 'resetAfterSeconds': 3600}]}]}
+        helper.atomic_json(self.store.vitals / 'accounts-snapshot.json', snapshot)
+        self.assertTrue(all(a['usage']['status'] == 'unavailable' for a in self.store.list()['accounts']))
+
+    def test_usage_errors_and_missing_windows_do_not_become_zero_or_full_quota(self):
+        entry = {'id': 'first@example.test|workspace-a', 'email': 'first@example.test', 'hasError': True,
+                 'sessionFree': 0, 'weeklyFree': 0, 'sessionResetSeconds': 0, 'weeklyResetSeconds': 0}
+        snapshot = {'lastRefreshEpoch': 1789400000, 'accounts': [entry]}
+        reading = helper.usage_snapshot(snapshot)[('first@example.test', 'workspace-a')]
+        self.assertEqual(reading['status'], 'error')
+        self.assertEqual(reading['windows'], [])
+        entry.update(hasError=False, quotaWindows=[])
+        self.assertEqual(helper.usage_snapshot(snapshot)[('first@example.test', 'workspace-a')]['windows'], [])
+        snapshot['lastRefreshEpoch'] = None
+        self.assertEqual(helper.usage_snapshot(snapshot), {})
+
+    def test_legacy_usage_preserves_real_zero_percent_and_unknown_reset(self):
+        snapshot = {'lastRefreshEpoch': 1789400000, 'accounts': [{
+            'id': 'first@example.test|workspace-a', 'email': 'first@example.test', 'hasError': False,
+            'sessionFree': 0, 'weeklyFree': 54, 'sessionResetSeconds': 0, 'weeklyResetSeconds': 3600}]}
+        windows = helper.usage_snapshot(snapshot)[('first@example.test', 'workspace-a')]['windows']
+        self.assertEqual(len(windows), 2)
+        self.assertEqual(windows[0]['remainingPercent'], 0)
+        self.assertIsNone(windows[0]['resetsAt'])
+
     def test_import_is_atomic_private_and_does_not_activate_or_edit_vitals(self):
         self.capture(self.target)
         vitals_before = (self.store.vitals / 'accounts.json').read_bytes()

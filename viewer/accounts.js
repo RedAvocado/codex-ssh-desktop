@@ -61,7 +61,23 @@ function render(state) {
       button.addEventListener('click', () => perform(() => window.accounts.switch(account.id)));
       actions.append(button);
     }
-    card.append(details, actions); container.append(card);
+    const reading = usageDisplay(row.usage);
+    const usage = text('div', '', 'usage');
+    const metrics = text('div', '', 'usage-windows');
+    for (const window of reading.windows) {
+      const metric = text('div', '', 'usage-window');
+      const heading = text('div', '', 'usage-heading');
+      heading.append(text('span', window.label, 'usage-label'), text('strong', window.remaining, 'usage-remaining'));
+      const bar = document.createElement('progress'); bar.max = 100; bar.value = window.percent;
+      bar.setAttribute('aria-label', `${window.label}: ${window.remaining}`);
+      if (window.percent <= 10) bar.className = 'low';
+      metric.append(heading, bar, text('p', window.reset, `usage-reset${window.resetPassed ? ' expired' : ''}`));
+      metrics.append(metric);
+    }
+    if (reading.message) usage.append(text('p', reading.message, 'usage-message'));
+    else usage.append(metrics);
+    usage.append(text('p', `${reading.provenance}${reading.stale && reading.windows.length ? ' · cached reading' : ''}`, 'usage-source'));
+    card.append(details, actions, usage); container.append(card);
   }
 }
 async function perform(operation) {
@@ -76,3 +92,6 @@ $('#refresh').addEventListener('click', () => perform(() => window.accounts.read
 $('#check').addEventListener('click', () => perform(() => window.accounts.checkSwitch()));
 $('#recovery').addEventListener('click', () => perform(() => window.accounts.acknowledgeRecovery()));
 void perform(() => window.accounts.read());
+setInterval(() => {
+  if (!document.hidden && !awaiting && !lastState.busy && !lastState.blocked) void perform(() => window.accounts.read());
+}, 60000);

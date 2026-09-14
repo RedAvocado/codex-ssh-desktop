@@ -4,7 +4,7 @@ A separate macOS app that brings the Codex desktop interface to your computer
 while commands, files, tools, and the Codex account stay on your remote Mac.
 The interface renders locally; the connection uses your existing SSH alias.
 
-**Experimental 0.2 release.** Built from the community `codex-web` bridge.
+**Experimental 0.3 release.** Built from the community `codex-web` bridge.
 This is an independent project from DittoDub, not an official OpenAI app.
 
 [Download for macOS](https://github.com/RedAvocado/codex-ssh-desktop/releases/latest)
@@ -49,7 +49,7 @@ Run these commands **on the remote Mac**:
 git clone https://github.com/RedAvocado/codex-ssh-desktop.git \
   ~/.local/share/codex-ssh-desktop
 cd ~/.local/share/codex-ssh-desktop
-git checkout v0.2.1
+git checkout v0.3.0
 npm ci
 npm run prepare:desktop -- /Applications/ChatGPT.app
 npm run build:browser
@@ -91,6 +91,15 @@ The list combines Vitals profiles, previously copied accounts, and the active
 Codex login. Copy and Switch controls stay together on the account's row.
 Distinct workspace identities remain separate even if they share an email.
 Once loaded, remote accounts are also available directly in the Accounts menu.
+
+Each row shows **percent remaining** and **reset dates** for the quota windows
+Vitals reports, such as weekly or five-hour limits. The newest successful Vitals
+snapshot available on either Mac is used for that account. The source and last
+update time appear below the reading, and reset dates use the local Mac's time
+zone. The page re-reads snapshots every minute while visible and when you click
+Refresh. Refresh inside Vitals to fetch a new reading from OpenAI. Missing or
+failed readings are shown as unavailable; a passed reset is marked as needing
+a refresh rather than assuming the account is full again.
 
 - **Copy to remote** sends the selected account's access, refresh, and ID tokens
   over SSH into a private account store. It does not activate the account or
