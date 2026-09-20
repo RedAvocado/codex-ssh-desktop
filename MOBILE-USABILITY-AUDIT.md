@@ -35,3 +35,12 @@ Updated September 19, 2026. Two independent agents reviewed mobile usability and
 - Temporary browser tabs, touch/viewport overrides, local test proxy, and its SSH port forward were cleaned up. No temporary test listeners remain on ports 18214 or 18420.
 
 Close and reopen Remote Codex on the phone once to load the update. If the service restart left an existing page showing **Reopen connection**, copy any unsent draft before choosing it. Remaining cold-start costs are documented in `STARTUP-INVESTIGATION.md`.
+
+## September 20: profile footer spacing
+
+Added 12 pixels of bottom drawer padding in addition to the phone's safe-area
+inset. At 390 × 844 and 320 × 568 with a zero reported inset, the profile button
+now ends 13 pixels above the viewport edge and retains its 44-pixel touch target.
+The profile popup opens fully within the 390-pixel viewport. Desktop profile,
+sidebar, and content measurements at 1280 × 720 are unchanged. The browser
+bundle was rebuilt and deployed without restarting the task backend.
