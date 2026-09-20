@@ -4,6 +4,7 @@ import {
 } from "./routes";
 import {resumeFollowerGoal} from './goal-resume';
 import {followExistingOwner} from './owner-follow';
+import {browserCapabilities} from './capabilities';
 import {
   handleLocalFilePickerMessage,
   isLocalFilePickerMessage,
@@ -565,7 +566,7 @@ ensureSocket();
 
 export const contextBridge = {
   exposeInMainWorld(_key: string, _api: unknown): void {
-    Reflect.set(window, _key, _api);
+    Reflect.set(window, _key, browserCapabilities(_key, _api));
   },
 };
 
