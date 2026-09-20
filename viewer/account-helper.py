@@ -111,6 +111,8 @@ def identity(auth):
             'The profile contains mismatched workspace credentials.')
     access_email = access_claims.get('https://api.openai.com/profile', {}).get('email')
     require(not access_email or str(access_email).lower() == email, 'The profile contains mismatched account credentials.')
+    require(all(number(access_claims.get(key, 0)) and access_claims.get(key, 0) >= 0 for key in ('iat', 'exp')),
+            'The profile contains invalid token timestamps.')
     return {'id': digest([subject, account]), 'email': email, 'accountId': account,
             'subject': subject, 'expiresAt': access_claims.get('exp', 0),
             'issuedAt': access_claims.get('iat', 0)}
@@ -121,13 +123,16 @@ def freshness(auth):
     refreshed = 0
     try:
         refreshed = datetime.datetime.fromisoformat(auth.get('last_refresh', '').replace('Z', '+00:00')).timestamp()
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError, OverflowError):
         pass
     return (float(item['issuedAt'] or 0), refreshed, float(item['expiresAt'] or 0))
 
 
 def number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def usage_snapshot(snapshot):
@@ -184,6 +189,7 @@ class Store:
         self.root = self.home / '.local/share/codex-ssh-desktop/accounts'
         self.vitals = self.home / 'Library/Application Support/CodexVitals'
         self.live = self.home / '.codex/auth.json'
+        self.operation_lock_fd = None
 
     @contextlib.contextmanager
     def lock(self):
@@ -196,8 +202,11 @@ class Store:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise AccountError('Another account operation is running on this Mac. Try again when it finishes.')
+            self.operation_lock_fd = fd
             yield fd
         finally:
+            if self.operation_lock_fd == fd:
+                self.operation_lock_fd = None
             os.close(fd)
 
     def candidates(self):
@@ -456,7 +465,10 @@ class MacProcesses:
     def reconnect_runtime(self):
         if not self.runtime_was_running:
             return
-        result = run_command([self.node, str(self.control), 'ensure'], timeout=65)
+        command = [self.node, str(self.control), 'ensure']
+        if self.store.operation_lock_fd is not None:
+            command.append('--account-operation-lock-held')
+        result = run_command(command, timeout=65)
         require(result.returncode == 0, 'Codex relaunched, but the auxiliary runtime needs a reconnect.')
 
 

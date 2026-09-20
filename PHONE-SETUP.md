@@ -56,6 +56,8 @@ display native Electron popups.
 **There is no automatic GitHub-push deployment service in this repository.**
 The phone maintenance job checks runtime health and renews the HTTPS
 certificate; it does not pull Git, build new code, or install releases.
+Runtime startup uses the same interprocess lock as account switching, so
+maintenance cannot restart the auxiliary host during a credential change.
 GitHub CI checks source changes and the packaging workflow builds a macOS
 client on request. Neither workflow connects to your remote Mac.
 

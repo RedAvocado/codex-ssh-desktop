@@ -53,8 +53,8 @@ export function createLocalTranscriber(runtime: string, execute: Runner = run) {
       const text = (await fs.readFile(output + '.txt', 'utf8')).trim();
       return {text};
     } finally {
-      if (directory) await fs.rm(directory, {recursive: true, force: true});
-      busy = false;
+      try { if (directory) await fs.rm(directory, {recursive: true, force: true}); }
+      finally { busy = false; }
     }
   };
 }

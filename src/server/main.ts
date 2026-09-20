@@ -546,9 +546,11 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     transport.socketConnections++; transport.activeSockets++;
     socket.on('close', () => transport.activeSockets--);
   });
-  readBridgeDiagnostics = resumableBridge<RendererToMainMessage | MainToRendererMessage>(websocketServer, send => {
+  readBridgeDiagnostics = resumableBridge<RendererToMainMessage | MainToRendererMessage>(websocketServer, (send, fail) => {
     let rendererWindow: RendererWindow | undefined;
     let disposed = false;
+    const initializationDeadline = setTimeout(() => fail('renderer initialization timed out'), 60_000);
+    initializationDeadline.unref();
     const rendererReady = rendererWindowFactory.then(async createWindow => {
       if (disposed) return undefined;
       const window = await createWindow();
@@ -559,8 +561,9 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       return window;
     }).catch(error => {
       console.error('[ipc-bridge] renderer initialization failed', error);
+      fail('renderer initialization failed');
       return undefined;
-    });
+    }).finally(() => clearTimeout(initializationDeadline));
     const messagePorts = new Map<string, WebSocketMessagePort>();
     const dispatchPostMessage = (
       channel: string,
@@ -584,6 +587,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
     const dispose = () => {
       disposed = true;
+      clearTimeout(initializationDeadline);
       for (const port of messagePorts.values()) port.disconnect();
       messagePorts.clear();
       if (rendererWindow) {

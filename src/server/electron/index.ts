@@ -1,5 +1,6 @@
 import path from 'node:path';
 import os from 'node:os';
+import {EventEmitter} from 'node:events';
 type StubFunction = (...args: unknown[]) => unknown;
 type StubListener = (...args: unknown[]) => void;
 type StubMessagePort = {
@@ -111,23 +112,18 @@ function createEmitterStub(label: string): {
   once: (event: string, listener: StubListener) => unknown;
   removeListener: (event: string, listener: StubListener) => unknown;
 } {
-  const listeners = new Map<string, Set<StubListener>>();
+  const emitter = new EventEmitter();
 
   const api = {
     on(event: string, listener: StubListener): unknown {
       log(`${label}.on`, [event, listener]);
-      const eventListeners = listeners.get(event) ?? new Set<StubListener>();
-      eventListeners.add(listener);
-      listeners.set(event, eventListeners);
+      emitter.on(event, listener);
       return api;
     },
     once(event: string, listener: StubListener): unknown {
       log(`${label}.once`, [event, listener]);
-      const wrapped: StubListener = (...args: unknown[]) => {
-        api.removeListener(event, wrapped);
-        listener(...args);
-      };
-      return api.on(event, wrapped);
+      emitter.once(event, listener);
+      return api;
     },
     addListener(event: string, listener: StubListener): unknown {
       log(`${label}.addListener`, [event, listener]);
@@ -135,7 +131,7 @@ function createEmitterStub(label: string): {
     },
     removeListener(event: string, listener: StubListener): unknown {
       log(`${label}.removeListener`, [event, listener]);
-      listeners.get(event)?.delete(listener);
+      emitter.removeListener(event, listener);
       return api;
     },
     off(event: string, listener: StubListener): unknown {
@@ -144,10 +140,7 @@ function createEmitterStub(label: string): {
     },
     emit(event: string, ...args: unknown[]): boolean {
       log(`${label}.emit`, [event, ...args]);
-      for (const listener of listeners.get(event) ?? []) {
-        listener(...args);
-      }
-      return true;
+      return emitter.emit(event, ...args);
     },
   };
 
@@ -570,10 +563,10 @@ class BrowserWindow {
 
   close(): void {
     log(`BrowserWindow#${this.id}.close`, []);
-    this.emitter.emit("close", {
-      preventDefault: () => undefined,
-    });
-    this.destroy();
+    if (this.destroyed) return;
+    const event = {defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }};
+    this.emitter.emit("close", event);
+    if (!event.defaultPrevented) this.destroy();
   }
 
   destroy(): void {
@@ -779,9 +772,14 @@ class Notification {
 }
 
 const dialog = {
-  async showMessageBox(...args: unknown[]): Promise<{ response: number }> {
+  async showMessageBox(...args: unknown[]): Promise<{ response: number; checkboxChecked: boolean }> {
     log("dialog.showMessageBox", args);
-    return { response: 0 };
+    const options = args.at(-1) as {buttons?: unknown; cancelId?: unknown} | undefined;
+    if (Array.isArray(options?.buttons) && typeof options.cancelId === 'number' &&
+      Number.isInteger(options.cancelId) && options.cancelId >= 0 && options.cancelId < options.buttons.length) {
+      return {response: options.cancelId, checkboxChecked: false};
+    }
+    throw Error('This action needs a native confirmation on the remote computer. Open Codex there to continue.');
   },
 };
 

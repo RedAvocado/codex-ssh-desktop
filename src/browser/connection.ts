@@ -1,12 +1,13 @@
 import {ReliableChannel} from '../shared/reliable-channel';
 
-export function connectRenderer<T>(deliver: (message: T) => void) {
+export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (reason: string) => void = () => {}) {
   const sessionId = crypto.randomUUID();
   let socket: WebSocket | undefined;
   let resume = false, ready = false, stopped = false, attempts = 0;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let notice: HTMLDivElement | undefined;
   function status(expired = false) {
+    if (!expired && (ready || stopped)) return;
     if (!document.body) { document.addEventListener('DOMContentLoaded', () => status(expired), {once:true}); return; }
     if (!notice) {
       notice = document.createElement('div'); notice.id = 'ssh-connection-status';
@@ -24,6 +25,7 @@ export function connectRenderer<T>(deliver: (message: T) => void) {
   const channel = new ReliableChannel<T>(deliver, reason => {
     console.warn('[ssh-bridge] session reset:',reason);
     stopped = true; ready = false; clearTimeout(retry); socket?.close(); status(true); if(notice) notice.dataset.reason = reason;
+    onFailure(reason);
   });
   function connect() {
     if (stopped || socket && socket.readyState < WebSocket.CLOSING) return;

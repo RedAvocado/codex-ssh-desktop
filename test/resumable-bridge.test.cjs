@@ -1,6 +1,28 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {WebSocket,WebSocketServer}=require('ws');const {once}=require('node:events');const {randomUUID}=require('node:crypto');
 const {resumableBridge}=require('../src/server/resumable-bridge.js');
+function syntheticBridge(t,create){
+ const {EventEmitter}=require('node:events');
+ const server=new EventEmitter(),socket=new EventEmitter();socket.readyState=WebSocket.OPEN;socket.frames=[];
+ socket.send=raw=>socket.frames.push(JSON.parse(raw));socket.ping=()=>{};
+ socket.close=socket.terminate=()=>{if(socket.readyState===WebSocket.CLOSED)return;socket.readyState=WebSocket.CLOSED;socket.emit('close')};
+ const health=resumableBridge(server,create);server.emit('connection',socket);
+ t.after(()=>{socket.close();server.emit('close')});
+ return {socket,health,hello(){socket.emit('message',JSON.stringify({type:'bridge-hello',sessionId:randomUUID(),resume:false,ack:0}))}};
+}
+test('renderer factory exceptions reset only that view without escaping the socket handler',t=>{
+ const f=syntheticBridge(t,()=>{throw Error('fixture initialization failure')});
+ assert.doesNotThrow(()=>f.hello());assert.deepEqual(f.socket.frames,[{type:'bridge-reset'}]);assert.equal(f.health().length,0);
+});
+test('startup queue overflow resets the connection and disposes the failed view once',t=>{
+ let disposed=0;const f=syntheticBridge(t,send=>{for(let i=0;i<4100;i++)send(i);return{receive(){},dispose(){disposed++}}});
+ f.hello();assert.deepEqual(f.socket.frames,[{type:'bridge-reset'}]);assert.equal(f.health().length,0);assert.equal(disposed,1);
+});
+test('asynchronous renderer initialization failure can terminate its welcomed session',t=>{
+ let fail,disposed=0;const f=syntheticBridge(t,(_send,reject)=>{fail=reject;return{receive(){},dispose(){disposed++}}});
+ f.hello();assert.equal(typeof fail,'function');fail('fixture initialization failure');fail('repeated failure');
+ assert.deepEqual(f.socket.frames.map(frame=>frame.type),['bridge-welcome','bridge-reset']);assert.equal(f.health().length,0);assert.equal(disposed,1);
+});
 test('real sockets preserve a view across disconnects, deduplicate requests, replay results and expire safely',async t=>{
  let created=0,disposed=0;const received=[];
  const wss=new WebSocketServer({host:'127.0.0.1',port:0});await once(wss,'listening');

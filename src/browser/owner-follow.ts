@@ -14,26 +14,30 @@ type FollowManager = {
 // establish a follower role; discovery alone is not sufficient.
 export async function followExistingOwner(manager: FollowManager, id: string, current: () => boolean, timeoutMs=15000) {
   if(manager.getHostId()!=='local' || manager.getStreamRole(id)!=null || !current())return;
-  let owner: string | null;
-  try {owner=await manager.ipcBridge.findThreadOwner({hostId:'local',conversationId:id});}
-  catch {return;} // The subsequent engine resume still enforces its writer lock.
-  if(!owner || !current() || manager.getStreamRole(id)!=null)return;
-  let remove=()=>{},timer:ReturnType<typeof setTimeout>|undefined;
-  let finish=()=>{};
-  const ready=new Promise<void>(resolve=>{
-    finish=resolve;
-    remove=manager.addStreamRoleStateCallback(thread=>{
-      if(thread===id && manager.getStreamRole(id)?.role==='follower')resolve();
-    });
-    timer=setTimeout(resolve,timeoutMs);
-  });
+  let remove=()=>{},timer:ReturnType<typeof setTimeout>|undefined,requested=false;
+  const deadline=new Promise<void>(resolve=>{timer=setTimeout(resolve,timeoutMs)});
   try {
+    let owner: string | null;
+    try {owner=await Promise.race([manager.ipcBridge.findThreadOwner({hostId:'local',conversationId:id}),deadline.then(()=>null)]);}
+    catch {return;} // The subsequent engine resume still enforces its writer lock.
+    if(!owner || !current() || manager.getStreamRole(id)!=null)return;
+    let finish=()=>{};
+    const ready=new Promise<void>(resolve=>{
+      finish=resolve;
+      remove=manager.addStreamRoleStateCallback(thread=>{
+        if(thread===id && manager.getStreamRole(id)?.role==='follower')resolve();
+      });
+    });
+    requested=true;
     manager.streamState.setConversationFollowing(id,true);
-    await manager.ipcBridge.threadStreamFollowingChanged({hostId:'local',conversationId:id,following:true,targetClientIds:[owner]});
+    const notified=manager.ipcBridge.threadStreamFollowingChanged({hostId:'local',conversationId:id,following:true,targetClientIds:[owner]});
     if(manager.getStreamRole(id)?.role==='follower')finish();
-    await ready;
+    // Receipt of the snapshot is authoritative. An IPC acknowledgement may be
+    // lost independently; neither it nor owner discovery can outlive the deadline.
+    await Promise.race([ready,deadline,notified.then(()=>ready)]);
+    if(current() && manager.getStreamRole(id)?.role!=='follower')throw Error('The task owner on the remote computer was found, but its state has not arrived. Try opening the task again.');
   } finally {
     remove();if(timer)clearTimeout(timer);
+    if(requested && manager.getStreamRole(id)==null)manager.streamState.setConversationFollowing(id,false);
   }
-  if(current() && manager.getStreamRole(id)?.role!=='follower')throw Error('The task owner on the remote computer was found, but its state has not arrived. Try opening the task again.');
 }

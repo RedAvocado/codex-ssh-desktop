@@ -91,10 +91,16 @@ async function downloadAsset(asset, output, {fetchImpl = fetch, signal, onProgre
     if (bytes > asset.size) return callback(Error('The update download is larger than expected.'));
     hash.update(chunk); onProgress(bytes / asset.size); callback(null, chunk);
   }});
+  // Acquire exclusive ownership before entering the cleanup path. EEXIST must
+  // never remove an archive this download did not create.
+  let file;
+  try { file = await fsp.open(output, 'wx', 0o600); }
+  catch (error) { await response.body.cancel(); throw error; }
   try {
-    await pipeline(Readable.fromWeb(response.body), meter, fs.createWriteStream(output, {flags: 'wx', mode: 0o600}), {signal: abort});
+    await pipeline(Readable.fromWeb(response.body), meter, file.createWriteStream(), {signal: abort});
     if (bytes !== asset.size || hash.digest('hex') !== asset.sha256) throw Error('The update checksum did not match GitHub. Nothing was installed.');
-  } catch (error) { await fsp.rm(output, {force: true}); throw error; }
+  } catch (error) { await file.close(); await fsp.rm(output, {force: true}); throw error; }
+  finally { await file.close(); }
 }
 async function prepareUpdate(release, {target, currentVersion, signal, onProgress, fetchImpl} = {}) {
   if (process.platform !== 'darwin') throw Error('In-app installation is available on macOS.');

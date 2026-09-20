@@ -16,6 +16,13 @@ async function health(){
 async function run(){
   if(!['status','ensure','stop'].includes(command))throw Error('Usage: node desktop/control.cjs status|ensure|stop');
   if(command==='status'){console.log(JSON.stringify(await health()??{ready:false}));return;}
+  // The internal argument is used only by runtime-lock.py and an account worker
+  // already holding the same flock. It is coordination, never authentication.
+  if(process.argv[3]!=='--account-operation-lock-held'){
+    const child=spawn('/usr/bin/python3',[path.join(__dirname,'runtime-lock.py'),process.execPath,__filename,command],{stdio:'inherit'});
+    await new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>{if(signal)reject(Error('Runtime control was interrupted.'));else{process.exitCode=code??1;resolve();}})});
+    return;
+  }
   if(command==='stop'){
     if(!fs.existsSync(pidFile))return;
     const pid=Number(fs.readFileSync(pidFile,'utf8'));

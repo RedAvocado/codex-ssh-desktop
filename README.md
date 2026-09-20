@@ -55,6 +55,9 @@ The phone icon opens the version deployed on your remote Mac. Reloading picks
 up deployed changes; a GitHub push alone does **not** deploy them. The existing
 macOS release updater updates the local client shell separately.
 
+See the [deep reliability and security review](DEEP-REVIEW.md) for the reviewed
+failure cases, fixes, validation, and remaining compatibility limits.
+
 ## Compatibility
 
 The adaptation scripts support **Codex desktop 26.903.61454 and 26.911.61220**

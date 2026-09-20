@@ -18,6 +18,7 @@ app.commandLine.appendSwitch('disable-background-networking');
 if(!app.requestSingleInstanceLock()){app.quit();return;}
 let window,settingsWindow,tunnel,token,viewerSession,config,accountControls,updateControls,connecting=false,quitting=false,retryTimer;
 let statusPageUrl=null,reconnectAvailable=false;
+let connectedConfig=null,reconnectAttempts=0;
 const origin='http://127.0.0.1:18214';
 function log(message){
   const directory=app.getPath('userData');fs.mkdirSync(directory,{recursive:true,mode:0o700});
@@ -34,28 +35,42 @@ function execCommand(file,args,timeout=65000){return new Promise((resolve,reject
 function execSSH(args){return execCommand('/usr/bin/ssh',['-o','BatchMode=yes','-o','ConnectTimeout=10',...args]);}
 function portOpen(){return new Promise(resolve=>{const socket=net.connect({host:'127.0.0.1',port:18214});socket.once('connect',()=>{socket.destroy();resolve(true)});socket.once('error',()=>resolve(false));});}
 function stopTunnel(){if(tunnel){tunnel.removeAllListeners('exit');tunnel.kill();tunnel=null;}}
+function hasRemoteView(){const url=window?.webContents.getURL();return url===origin||url?.startsWith(origin+'/');}
+function retryConnection(){
+  clearTimeout(retryTimer);
+  if(!quitting)retryTimer=setTimeout(()=>void connect(),Math.min(2000*2**Math.min(reconnectAttempts++,4),30000));
+}
 async function connect(){
   if(connecting||quitting||accountControls?.blocksConnection())return;connecting=true;clearTimeout(retryTimer);
+  let preserveView=false;
   try{
     config=readConfig(app.getPath('userData'));
     if(!config){await status('Choose your remote computer','Open Connection → Settings to configure an SSH host.');showSettings();return;}
-    await status(`Connecting to ${config.sshHost}`,'Establishing an SSH connection. Your Codex login stays on the remote computer.');
+    preserveView=hasRemoteView()&&connectedConfig===JSON.stringify(config);
+    if(!preserveView)await status(`Connecting to ${config.sshHost}`,'Establishing an SSH connection. Your Codex login stays on the remote computer.');
     const info=JSON.parse(await execSSH([config.sshHost,remoteCommand(config)]));
+    if(quitting)return;
     if(!info.ready||!/^[a-f0-9]{64}$/.test(info.token)||info.port!==18314)throw Error('The remote host returned an invalid connection response.');
     token=info.token;stopTunnel();
     if(await portOpen())throw Error('Local port 18214 is in use. Close another SSH desktop viewer, then reconnect.');
     tunnel=spawn('/usr/bin/ssh',['-NT','-o','BatchMode=yes','-o','ExitOnForwardFailure=yes','-o','ConnectTimeout=10','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3','-L','127.0.0.1:18214:127.0.0.1:18314','-L','127.0.0.1:18215:127.0.0.1:18315',config.sshHost],{stdio:['ignore','ignore','pipe']});
     let tunnelError='';tunnel.stderr.on('data',data=>{tunnelError=(tunnelError+data.toString()).slice(-2000)});
     tunnel.on('error',error=>log(`SSH could not start: ${error.message}`));
-    tunnel.once('exit',()=>{tunnel=null;if(!quitting){log('SSH disconnected');void status('Reconnecting','Reconnecting to the remote host…');retryTimer=setTimeout(()=>void connect(),2000)}});
+    tunnel.once('exit',()=>{tunnel=null;if(!quitting){log('SSH disconnected');if(!hasRemoteView())void status('Reconnecting','Reconnecting to the remote host…');retryConnection()}});
     for(let i=0;i<80;i++){if(await portOpen())break;if(!tunnel)throw Error(tunnelError.trim()||'SSH tunnel closed.');await new Promise(resolve=>setTimeout(resolve,100));}
     if(!await portOpen())throw Error('SSH forwarding did not become ready.');
     await viewerSession.setProxy({proxyRules:'http=127.0.0.1:18215;https=127.0.0.1:18215',proxyBypassRules:'<-loopback>;127.0.0.1:18214'});
     if(await viewerSession.resolveProxy(origin)!=='DIRECT'||!(await viewerSession.resolveProxy('https://example.com')).includes('127.0.0.1:18215'))throw Error('SSH traffic routing could not be verified.');
     await viewerSession.cookies.set({url:origin,name:config.sessionCookie,value:token,httpOnly:true,sameSite:'strict',path:'/'});
-    await window.loadURL(origin);
+    if(quitting)return;
+    if(!preserveView)await window.loadURL(origin);
+    connectedConfig=JSON.stringify(config);reconnectAttempts=0;
     log(`Connected; viewer ${version}; remote desktop ${info.version}; remote runtime PID ${info.pid}`);
-  }catch(error){log(`Connection failed: ${error.message}`);await status('Connection needs attention',`${error.message} Try reconnecting, or open Connection → Settings to check your SSH host.`,{reconnect:true});}
+  }catch(error){
+    log(`Connection failed: ${error.message}`);
+    if(preserveView){retryConnection();}
+    else if(!quitting)await status('Connection needs attention',`${error.message} Try reconnecting, or open Connection → Settings to check your SSH host.`,{reconnect:true});
+  }
   finally{connecting=false;}
 }
 async function openRemote(url){

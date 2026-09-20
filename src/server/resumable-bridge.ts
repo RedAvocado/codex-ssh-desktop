@@ -6,13 +6,15 @@ import {ReliableChannel} from '../shared/reliable-channel';
 // still required before WebSocket upgrade. Nothing survives a server restart.
 export function resumableBridge<T>(server: WebSocketServer, create: (
   send: (message: T) => void,
+  fail: (reason: string) => void,
 ) => {receive: (message: T) => void; dispose: () => void}, ttl = 10 * 60_000) {
   type Session = {channel: ReliableChannel<T>; socket?: WebSocket; timer?: NodeJS.Timeout; dispose: () => void};
   const sessions = new Map<string, Session>();
   const remove = (id: string) => {
     const session = sessions.get(id); if (!session) return;
     sessions.delete(id); clearTimeout(session.timer);
-    session.socket?.close(1000, 'View expired'); session.channel.detach(); session.dispose();
+    session.socket?.close(1000, 'View expired'); session.channel.detach();
+    try { session.dispose(); } catch { console.error('[ipc-bridge] view cleanup failed'); }
   };
   server.on('connection', socket => {
     let id: string | undefined;
@@ -42,17 +44,28 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
           socket.send(JSON.stringify({type:'bridge-reset'})); socket.close(1000); return;
         }
         if (!session) {
-          const channel = new ReliableChannel<T>(message => view.receive(message), reason => {
+          let view: ReturnType<typeof create> | undefined;
+          const channel = new ReliableChannel<T>(message => view?.receive(message), reason => {
             console.warn('[ipc-bridge] session reset:',reason);
             const current = sessions.get(sessionId);
-            current?.socket?.send(JSON.stringify({type:'bridge-reset'})); remove(sessionId);
+            if (current?.socket?.readyState === WebSocket.OPEN) current.socket.send(JSON.stringify({type:'bridge-reset'}));
+            remove(sessionId);
           });
-          const view = create(message => channel.send(message));
-          session = {channel, dispose:view.dispose}; sessions.set(sessionId, session);
+          // Register before invoking the factory: startup can synchronously send
+          // enough data to overflow, or fail before returning a view.
+          session = {channel, socket, dispose:()=>view?.dispose()}; sessions.set(sessionId, session);
+          try { view = create(message => channel.send(message), reason => channel.abort(reason)); }
+          catch { channel.abort('renderer initialization failed'); }
+          if (channel.failed) {
+            // A synchronous failure happened before the view could be returned
+            // to remove(). Dispose its eventual return value exactly once.
+            try { view?.dispose(); } catch { console.error('[ipc-bridge] view cleanup failed'); }
+            return;
+          }
         }
         id = sessionId; clearTimeout(helloDeadline); clearTimeout(session.timer);
         const previous = session.socket; session.socket = socket;
-        previous?.close(1000, 'Connection replaced');
+        if (previous !== socket) previous?.close(1000, 'Connection replaced');
         socket.send(JSON.stringify({type:'bridge-welcome', ack:session.channel.received}));
         session.channel.attach(wire => {if(socket.readyState === WebSocket.OPEN) socket.send(wire);}, frame.ack);
         return;
@@ -60,7 +73,8 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
       const session = sessions.get(id);
       if (session?.socket === socket) {
         if (frame?.type === 'bridge-release') { remove(id); return; }
-        session.channel.receive(frame);
+        try { session.channel.receive(frame); }
+        catch { session.channel.abort('renderer dispatch failed'); }
       }
     });
     socket.on('close', () => {

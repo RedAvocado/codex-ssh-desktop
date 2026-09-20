@@ -1,6 +1,6 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http'),https=require('node:https'),{once}=require('node:events'),{spawn,execFileSync}=require('node:child_process'),{gunzipSync}=require('node:zlib');
-test('gateway enforces its boundary, compresses static code and keeps API responses uncached',async t=>{
+async function fixture(t){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'private-phone-gateway-'));fs.mkdirSync(path.join(root,'desktop'));fs.mkdirSync(path.join(root,'runtime'));
  for(const name of ['phone-gateway.cjs','phone-policy.cjs'])fs.copyFileSync(path.join(__dirname,'../desktop',name),path.join(root,'desktop',name));
  fs.mkdirSync(path.join(root,'src/server'),{recursive:true});
@@ -11,7 +11,10 @@ test('gateway enforces its boundary, compresses static code and keeps API respon
  const source='/* test code */\n'.repeat(10000);
  const backend=http.createServer((req,res)=>{
   assert.equal(req.headers.cookie,'remote_session='+'a'.repeat(64));
-  if(req.url==='/assets/test.js'){
+  if(req.url==='/broken-html'||req.url==='/broken-text'){
+   res.writeHead(200,{'content-type':req.url.endsWith('html')?'text/html':'text/plain','content-length':1000});
+   res.write('partial');setImmediate(()=>res.destroy());
+  }else if(req.url==='/assets/test.js'){
    if(req.headers['if-none-match']==='"fixture"'){res.writeHead(304,{etag:'"fixture"'});res.end();return;}
    res.writeHead(200,{'content-type':'text/javascript',etag:'"fixture"','content-length':Buffer.byteLength(source)});res.end(source);
   }else if(req.url==='/api'){res.setHeader('content-type','application/json');res.end('{"private":"test"}')}
@@ -24,12 +27,16 @@ test('gateway enforces its boundary, compresses static code and keeps API respon
  assert.equal(gatewaySource.split('port:18314').length-1,2);
  fs.writeFileSync(gatewayFile,gatewaySource.replaceAll('port:18314',`port:${backend.address().port}`));
  const child=spawn(process.execPath,[path.join(root,'desktop/phone-gateway.cjs')],{stdio:['ignore','pipe','pipe']});
- t.after(()=>{child.kill('SIGKILL');backend.closeAllConnections();backend.close();fs.rmSync(root,{recursive:true,force:true})});
+ t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await once(child,'exit')}backend.closeAllConnections();await new Promise(resolve=>backend.close(resolve));fs.rmSync(root,{recursive:true,force:true})});
  await Promise.race([once(child.stdout,'data'),once(child,'exit').then(()=>{throw Error('Gateway exited')})]);
  const ca=fs.readFileSync(path.join(root,'runtime/phone.crt'));
  const request=(url,headers={},method='GET')=>new Promise((resolve,reject)=>{
-  const req=https.request(origin+url,{ca,headers,method},res=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}))});req.on('error',reject);req.end();
+  const req=https.request(origin+url,{ca,headers,method,timeout:2000},res=>{const chunks=[];res.on('error',reject);res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}))});req.on('error',reject);req.on('timeout',()=>req.destroy(Error('fixture request timed out')));req.end();
  });
+ return {request,root,source,origin};
+}
+test('gateway enforces its boundary, compresses static code and keeps API responses uncached',async t=>{
+ const {request,source,origin}=await fixture(t);
  const asset=await request('/assets/test.js',{'accept-encoding':'gzip'});assert.equal(asset.status,200);assert.equal(asset.headers['content-encoding'],'gzip');assert.equal(gunzipSync(asset.body).toString(),source);assert.ok(asset.body.length<source.length/10);assert.match(asset.headers['cache-control'],/^private/);assert.equal(asset.headers['set-cookie'],undefined);
  const cached=await request('/assets/test.js',{'if-none-match':'"fixture"'});assert.equal(cached.status,304);assert.match(cached.headers['cache-control'],/^private/);
  const api=await request('/api');assert.equal(api.headers['cache-control'],'no-store');assert.equal(api.headers['content-encoding'],undefined);
@@ -43,4 +50,24 @@ test('gateway enforces its boundary, compresses static code and keeps API respon
  assert.equal(local.status,400);assert.match(local.body.toString(),/Expected an audio/);
  assert.equal(local.headers['cache-control'],'no-store');
  console.log('Static transfer fixture:',source.length,'->',asset.body.length,'bytes; authenticated revalidation and API no-store passed');
+});
+test('a missing backend token returns a recoverable error and leaves the gateway alive',async t=>{
+ const {request,root,origin}=await fixture(t),file=path.join(root,'runtime/viewer-token');
+ const page=await request('/'),cookie=page.headers['set-cookie'][0].split(';')[0];
+ fs.unlinkSync(file);assert.equal((await request('/api')).status,503);
+ assert.equal((await request('/__backend/ipc',{origin,cookie,connection:'Upgrade',upgrade:'websocket','sec-websocket-version':'13','sec-websocket-key':'Zml4dHVyZS1rZXktZm9yLXdz'})).status,503);
+ fs.writeFileSync(file,'a'.repeat(64));assert.equal((await request('/api')).status,200);
+});
+test('an aborted upstream HTML response fails cleanly without crashing the gateway',async t=>{
+ const {request}=await fixture(t);
+ assert.equal((await request('/broken-html')).status,503);assert.equal((await request('/api')).status,200);
+});
+test('an aborted upstream download closes the response without crashing the gateway',async t=>{
+ const {request}=await fixture(t);
+ await assert.rejects(request('/broken-text'),error=>error.message!=='fixture request timed out');assert.equal((await request('/api')).status,200);
+});
+test('gzip explicitly refused by the browser is not selected',async t=>{
+ const {request,source}=await fixture(t);
+ const reply=await request('/assets/test.js',{'accept-encoding':'br, gzip;q=0'});
+ assert.equal(reply.headers['content-encoding'],undefined);assert.equal(reply.body.toString(),source);
 });

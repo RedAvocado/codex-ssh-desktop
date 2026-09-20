@@ -55,6 +55,20 @@ test('transcription upload requires same origin and a bounded audio part',async 
  const reply=await app.inject({method:'POST',url:'/__backend/transcribe',headers,payload:'--test\r\nContent-Disposition: form-data; name="file"; filename="a.txt"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--test--\r\n'});
  assert.equal(reply.statusCode,400);assert.equal(reply.headers['cache-control'],'no-store');
 });
+test('a temporary-file cleanup error cannot leave dictation permanently busy',async t=>{
+ const f=await fixture(t),originalRm=fs.rm;
+ const transcribe=createLocalTranscriber(f.root,async(file,args)=>{
+  if(file===f.config.ffmpeg)await fs.writeFile(args.at(-1),Buffer.alloc(32000));
+  else await fs.writeFile(args[args.indexOf('-of')+1]+'.txt','recovered');
+ });
+ const mocked=t.mock.method(fs,'rm',async(directory,options)=>{
+  if(path.basename(directory).startsWith('recording-'))throw Error('fixture cleanup failure');
+  return originalRm(directory,options);
+ });
+ await assert.rejects(transcribe(Buffer.from('audio'),'en',new AbortController().signal),/cleanup failure/);
+ mocked.mock.restore();
+ assert.deepEqual(await transcribe(Buffer.from('audio'),'en',new AbortController().signal),{text:'recovered'});
+});
 test('renderer patch routes batch audio locally and disables external streaming and cleanup',async()=>{
  const {patchLocalTranscription}=await import('../desktop/transcription-patch.mjs');
  const source='async function EPo(e,t={}){let n=t.contentType??"audio/webm";}function A5s(e){let t=(0,R.c)(88),{cleanupEnabled:n,onTranscribeError:h,streamingEnabled:b}=e;}';

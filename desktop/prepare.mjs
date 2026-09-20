@@ -4,6 +4,7 @@ import {extractAll,extractFile} from '@electron/asar';
 import {patchGoalResume} from './goal-resume-patch.mjs';
 import {patchLocalTranscription} from './transcription-patch.mjs';
 import {patchBrowserServicePath} from './plugin-path-patch.mjs';
+import {patchPrivateAnalytics} from './analytics-patch.mjs';
 import {patchOwnership,patchOwnerFollowing,patchConflictRecovery} from './ownership-patch.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -66,7 +67,7 @@ for(const file of fs.readdirSync(path.join(out,'webview/assets'))){
  const fileReturn=new RegExp('return`\\$\\{'+filePrefix[1]+'\\}\\$\\{(\\w+)\\((\\w+)\\)\\}`');
  text=replaceOne(text,fileReturn,(_,fn,arg)=>`return ${fn}(${arg})`,'remote file previews');
  text=patchGoalResume(text);
- if(currentBuild)text=patchLocalTranscription(text);
+ if(currentBuild){text=patchLocalTranscription(text);text=patchPrivateAnalytics(text);}
  text=patchOwnership(text);
  text=patchOwnerFollowing(text);
  text=patchConflictRecovery(text);

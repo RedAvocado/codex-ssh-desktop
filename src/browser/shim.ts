@@ -144,7 +144,9 @@ const pendingDirectoryEntries = new Map<
   }
 >();
 const rendererListeners = new Map<string, Set<IpcListener>>();
+const onceListeners = new WeakMap<IpcListener, IpcListener>();
 const messagePorts = new Map<string, MessagePort>();
+let connectionError: Error | undefined;
 
 function unimplemented(method: string): never {
   debugger;
@@ -157,7 +159,7 @@ export function emitRendererEvent(channel: string, args: unknown[]): void {
     return;
   }
   const event = { sender: null };
-  for (const listener of listeners) {
+  for (const listener of [...listeners]) {
     listener(event, ...args);
   }
 }
@@ -208,8 +210,18 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
   }
 }
 
-const sendBridge = connectRenderer<RendererToMainMessage | MainToRendererMessage>(message => handleIncomingMessage(message as MainToRendererMessage));
-function enqueueMessage(message: RendererToMainMessage): void { sendBridge(message); }
+const sendBridge = connectRenderer<RendererToMainMessage | MainToRendererMessage>(
+  message => handleIncomingMessage(message as MainToRendererMessage),
+  () => {
+    connectionError = new Error('The remote session ended. Copy any unsent text, then reopen the connection.');
+    for (const pending of pendingInvokes.values()) pending.reject(connectionError);
+    for (const pending of pendingDirectoryEntries.values()) pending.reject(connectionError);
+    pendingInvokes.clear(); pendingDirectoryEntries.clear();
+    for (const port of messagePorts.values()) port.close();
+    messagePorts.clear();
+  },
+);
+function enqueueMessage(message: RendererToMainMessage): void { if (!connectionError) sendBridge(message); }
 
 function nextRequestId(): string {
   requestCounter += 1;
@@ -217,6 +229,7 @@ function nextRequestId(): string {
 }
 
 function invokeMain(channel: string, args: unknown[]): Promise<unknown> {
+  if (connectionError) return Promise.reject(connectionError);
   args = prepareIpcArgs(args);
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
@@ -265,6 +278,7 @@ function isOpenInBrowserMessage(value: unknown): value is {
 function requestWorkspaceDirectoryEntries(
   directoryPath: string | null,
 ): Promise<WorkspaceDirectoryEntries> {
+  if (connectionError) return Promise.reject(connectionError);
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
     pendingDirectoryEntries.set(requestId, { resolve, reject });
@@ -355,6 +369,7 @@ export const ipcRenderer = {
       this.removeListener(channel, wrapped);
       listener(event, ...args);
     };
+    onceListeners.set(wrapped, listener);
     addIpcListener(channel, wrapped);
     return this;
   },
@@ -363,7 +378,9 @@ export const ipcRenderer = {
     return this;
   },
   removeListener(channel: string, listener: IpcListener): unknown {
-    rendererListeners.get(channel)?.delete(listener);
+    const listeners = rendererListeners.get(channel);
+    const registered = listeners && [...listeners].reverse().find(item => item === listener || onceListeners.get(item) === listener);
+    if (registered) listeners?.delete(registered);
     return this;
   },
   off(channel: string, listener: IpcListener): unknown {
@@ -381,7 +398,15 @@ export const ipcRenderer = {
     message: unknown,
     transfer?: Transferable[],
   ): void {
+    if (connectionError) {
+      for (const port of transfer ?? []) if (port instanceof MessagePort) port.close();
+      throw connectionError;
+    }
     if (transfer && transfer.length > 0) {
+      // Validate the entire transfer before taking ownership of any port.
+      if (transfer.some(port => !(port instanceof MessagePort)) || new Set(transfer).size !== transfer.length) {
+        throw new TypeError('Only distinct MessagePort transfers are supported by the browser IPC bridge.');
+      }
       const portIds = transfer.map((transferable) => {
         if (!(transferable instanceof MessagePort)) {
           throw new TypeError(

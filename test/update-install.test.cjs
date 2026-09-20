@@ -35,6 +35,12 @@ test('downloads reject off-host redirects and clean partial files on cancellatio
   await assert.rejects(downloadAsset(asset,file,{signal:controller.signal,fetchImpl:async()=>new Response(payload)}),/abort/i);
   await assert.rejects(fs.access(file));
 });
+test('a refused download never deletes an existing destination',async t=>{
+  const directory=await temporary(t),file=path.join(directory,'update.zip');
+  await fs.writeFile(file,'existing archive');
+  await assert.rejects(downloadAsset(asset,file,{fetchImpl:async()=>new Response(payload)}),{code:'EEXIST'});
+  assert.equal(await fs.readFile(file,'utf8'),'existing archive');
+});
 test('archive and install paths cannot escape the application bundle',()=>{
   validateArchivePaths('Codex SSH Desktop.app/Contents/MacOS/Electron\n__MACOSX/._Codex SSH Desktop.app\n');
   for(const invalid of ['../elsewhere','/Applications/other.app','Codex SSH Desktop.app/../elsewhere','another.app/file','Codex SSH Desktop.app/\tfile'])

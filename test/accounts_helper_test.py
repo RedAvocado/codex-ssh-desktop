@@ -151,6 +151,20 @@ class AccountsTests(unittest.TestCase):
         with self.assertRaises(helper.AccountError):
             helper.identity(wrong)
 
+    def test_corrupt_token_timestamps_are_skipped_without_breaking_other_accounts(self):
+        self.capture(self.original)
+        for bad in ['invalid', [], True, None, -1, float('inf'), 10 ** 400]:
+            value = auth()
+            payload = helper.claims(value['tokens']['access_token'])
+            payload['iat'] = bad
+            value['tokens']['access_token'] = jwt(payload)
+            helper.atomic_json(self.store.live, value)
+            result = self.store.list()
+            self.assertEqual(len(result['accounts']), 2)
+            self.assertTrue(any(item['id'] == self.target_id for item in result['accounts']))
+            with self.assertRaises(helper.AccountError):
+                helper.identity(value)
+
     def test_vitals_newer_token_pair_is_exported_without_modifying_vitals(self):
         self.capture(self.target)
         file = self.store.vitals / 'accounts.json'
