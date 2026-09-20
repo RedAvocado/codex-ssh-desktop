@@ -17,15 +17,18 @@ app.setPath('userData',path.join(os.homedir(),'Library/Application Support/Codex
 app.commandLine.appendSwitch('disable-background-networking');
 if(!app.requestSingleInstanceLock()){app.quit();return;}
 let window,settingsWindow,tunnel,token,viewerSession,config,accountControls,updateControls,connecting=false,quitting=false,retryTimer;
+let statusPageUrl=null,reconnectAvailable=false;
 const origin='http://127.0.0.1:18214';
 function log(message){
   const directory=app.getPath('userData');fs.mkdirSync(directory,{recursive:true,mode:0o700});
   fs.appendFileSync(path.join(directory,'viewer.log'),`${new Date().toISOString()} ${message}\n`,{mode:0o600});
 }
-function status(title,detail){
+function status(title,detail,{reconnect=false}={}){
   if(!window||window.isDestroyed())return Promise.resolve();
   const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  return window.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Codex SSH Desktop</title><style>body{margin:0;background:#15191b;color:#eef2ef;font:15px -apple-system,sans-serif;display:grid;place-items:center;height:100vh}.card{max-width:480px;padding:40px}.label{color:#9be6c4;font-size:11px;letter-spacing:2px}h1{font-size:28px}p{line-height:1.6;color:#b0bbb6}</style></head><body><div class="card"><div class="label">CODEX SSH DESKTOP</div><h1>${escape(title)}</h1><p>${escape(detail)}</p></div></body></html>`));
+  reconnectAvailable=reconnect;
+  statusPageUrl='data:text/html;charset=utf-8,'+encodeURIComponent(`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Codex SSH Desktop</title><style>body{margin:0;background:#15191b;color:#eef2ef;font:15px -apple-system,sans-serif;display:grid;place-items:center;height:100vh}.card{max-width:480px;padding:40px}.label{color:#9be6c4;font-size:11px;letter-spacing:2px}h1{font-size:28px}p{line-height:1.6;color:#b0bbb6}button{margin-top:12px;padding:11px 20px;border:0;border-radius:8px;background:#9be6c4;color:#15231c;font:600 15px -apple-system,sans-serif;cursor:pointer}button:hover{background:#b6f0d6}button:focus-visible{outline:2px solid #eef2ef;outline-offset:4px}button:disabled{opacity:.6;cursor:wait}</style></head><body><div class="card"><div class="label">CODEX SSH DESKTOP</div><h1>${escape(title)}</h1><p>${escape(detail)}</p>${reconnect?'<button id="reconnect" type="button">Reconnect</button>':''}</div></body></html>`);
+  return window.loadURL(statusPageUrl);
 }
 function execCommand(file,args,timeout=65000){return new Promise((resolve,reject)=>execFile(file,args,{timeout,maxBuffer:128*1024},(error,stdout,stderr)=>error?reject(Error(stderr.trim()||error.message)):resolve(stdout)));}
 function execSSH(args){return execCommand('/usr/bin/ssh',['-o','BatchMode=yes','-o','ConnectTimeout=10',...args]);}
@@ -52,7 +55,7 @@ async function connect(){
     await viewerSession.cookies.set({url:origin,name:config.sessionCookie,value:token,httpOnly:true,sameSite:'strict',path:'/'});
     await window.loadURL(origin);
     log(`Connected; viewer ${version}; remote desktop ${info.version}; remote runtime PID ${info.pid}`);
-  }catch(error){log(`Connection failed: ${error.message}`);await status('Connection needs attention',`${error.message} Use Connection → Settings or Reconnect to try again.`);}
+  }catch(error){log(`Connection failed: ${error.message}`);await status('Connection needs attention',`${error.message} Try reconnecting, or open Connection → Settings to check your SSH host.`,{reconnect:true});}
   finally{connecting=false;}
 }
 async function openRemote(url){
@@ -72,6 +75,11 @@ function showSettings(){
   void settingsWindow.loadFile(path.join(__dirname,'settings.html'));
 }
 function requireSettingsSender(event){if(!settingsWindow||event.sender!==settingsWindow.webContents)throw Error('Settings are only available from the connection window.');}
+ipcMain.on('connection-status:reconnect',event=>{
+  if(!window||event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||!reconnectAvailable||window.webContents.getURL()!==statusPageUrl)
+    return;
+  void connect();
+});
 ipcMain.handle('connection-settings:read',event=>{requireSettingsSender(event);try{return readConfig(app.getPath('userData'))??{...defaults}}catch{return{...defaults}}});
 ipcMain.handle('connection-settings:save',async(event,input)=>{
   requireSettingsSender(event);
@@ -90,7 +98,7 @@ app.whenReady().then(async()=>{
   app.setAboutPanelOptions({applicationName:'Codex SSH Desktop',applicationVersion:version,credits:'Independent community project. Not affiliated with OpenAI.'});
   viewerSession=session.fromPartition('codex-ssh-desktop-memory');
   viewerSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
-  window=new BrowserWindow({width:1380,height:950,minWidth:820,minHeight:600,title:'Codex SSH Desktop',backgroundColor:'#15191b',titleBarStyle:'hiddenInset',webPreferences:{session:viewerSession,nodeIntegration:false,contextIsolation:true,sandbox:true}});
+  window=new BrowserWindow({width:1380,height:950,minWidth:820,minHeight:600,title:'Codex SSH Desktop',backgroundColor:'#15191b',titleBarStyle:'hiddenInset',webPreferences:{preload:path.join(__dirname,'status-preload.cjs'),session:viewerSession,nodeIntegration:false,contextIsolation:true,sandbox:true}});
   window.webContents.setWindowOpenHandler(({url})=>{void openRemote(url);return{action:'deny'}});
   window.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(origin+'/')&&url!==origin&&!url.startsWith('data:')){event.preventDefault();void openRemote(url)}});
   window.webContents.on('page-title-updated',event=>{event.preventDefault();window.setTitle('Codex SSH Desktop')});
