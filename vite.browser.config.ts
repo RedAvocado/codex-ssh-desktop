@@ -43,6 +43,9 @@ export default defineConfig({
   resolve: {
     alias: {
       electron: path.resolve(configDir, "src/browser/shim.ts"),
+      // Server tsc emits adjacent CommonJS files. Always bundle the current
+      // shared source, even when only the browser is rebuilt.
+      "../shared/reliable-channel": path.resolve(configDir, "src/shared/reliable-channel.ts"),
     },
   },
   build: {

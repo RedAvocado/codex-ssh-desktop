@@ -842,8 +842,10 @@ const nativeImage = {
   },
   createFromPath(imagePath: string): { isEmpty: () => boolean } {
     log("nativeImage.createFromPath", [imagePath]);
+    // This Node host cannot decode native images. Report an empty image so
+    // appInfo.get() skips optional dock previews instead of retrying resize().
     return {
-      isEmpty: () => !imagePath,
+      isEmpty: () => true,
     };
   },
 };
@@ -961,6 +963,7 @@ function createSessionStub(label: string): {
   setPermissionCheckHandler: (...args: unknown[]) => void;
   setPermissionRequestHandler: (...args: unknown[]) => void;
   setPreferredLanguages: (languages: string[]) => void;
+  setWebsiteReportingEnabled: (enabled: boolean) => void;
   webRequest: {
     onBeforeRequest: (...args: unknown[]) => void;
     onBeforeSendHeaders: (...args: unknown[]) => void;
@@ -1015,6 +1018,9 @@ function createSessionStub(label: string): {
     },
     setPreferredLanguages(languages: string[]): void {
       log(`${label}.setPreferredLanguages`, [languages]);
+    },
+    setWebsiteReportingEnabled(_enabled: boolean): void {
+      // No Chromium network service exists in this Node-only auxiliary host.
     },
     webRequest: {
       onBeforeRequest(...args: unknown[]): void {

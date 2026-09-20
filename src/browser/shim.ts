@@ -1,6 +1,11 @@
+import {installMobileLayout} from './mobile';
+import {MOBILE_QUERY} from './mobile-viewport';
+import {connectRenderer} from './connection';
+import {transcribeAudio} from './transcription';
+import {prepareIpcArgs} from './diagnostic-log';
 import {
   mapBrowserPathToInitialRoute,
-  mapMemoryPathToBrowserPath,
+  createBrowserNavigationSync,
 } from "./routes";
 import {resumeFollowerGoal} from './goal-resume';
 import {followExistingOwner} from './owner-follow';
@@ -89,7 +94,7 @@ type MainToRendererMessage =
       portId: string;
     };
 
-const RECONNECT_DELAY_MS = 1_000;
+
 
 type MemoryNavigationChange = {
   action: "POP" | "PUSH" | "REPLACE";
@@ -104,6 +109,7 @@ type MemoryNavigationChange = {
 };
 
 type ElectronShimState = {
+  transcribeAudio?: typeof transcribeAudio;
   resumeFollowerGoal?: typeof resumeFollowerGoal;
   followExistingOwner?: typeof followExistingOwner;
   initialRoute?: string;
@@ -122,10 +128,6 @@ declare const __CODEX_APP_VERSION__: string;
 
 let requestCounter = 0;
 const codexAppSessionId = crypto.randomUUID();
-let socket: WebSocket | null = null;
-let needsReload = false;
-let reconnectTimeoutId: number | null = null;
-const outboundQueue: RendererToMainMessage[] = [];
 const pendingInvokes = new Map<
   string,
   {
@@ -205,82 +207,8 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
   }
 }
 
-function flushOutboundQueue(): void {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  for (const message of outboundQueue.splice(0)) {
-    socket.send(JSON.stringify(message));
-  }
-}
-
-function scheduleReconnect(): void {
-  if (reconnectTimeoutId !== null) {
-    return;
-  }
-  reconnectTimeoutId = window.setTimeout(() => {
-    reconnectTimeoutId = null;
-    ensureSocket();
-  }, RECONNECT_DELAY_MS);
-}
-
-function ensureSocket(): void {
-  if (
-    socket &&
-    (socket.readyState === WebSocket.OPEN ||
-      socket.readyState === WebSocket.CONNECTING)
-  ) {
-    return;
-  }
-
-  socket = new WebSocket(
-    `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/__backend/ipc`,
-  );
-  socket.addEventListener("open", () => {
-    // App-host RPC transfers MessagePorts once at startup. A new connection needs
-    // a fresh app view; replaying requests against the closed ports cannot recover it.
-    if (needsReload) {
-      window.location.reload();
-      return;
-    }
-    flushOutboundQueue();
-  });
-  socket.addEventListener("message", (event) => {
-    try {
-      const message = JSON.parse(String(event.data)) as MainToRendererMessage;
-      handleIncomingMessage(message);
-    } catch (error) {
-      console.error(
-        "[electron-stub] failed to parse IPC bridge message",
-        error,
-      );
-    }
-  });
-  socket.addEventListener("close", () => {
-    needsReload = true;
-    const error = new Error("Connection to Codex was lost");
-    for (const pending of pendingInvokes.values()) pending.reject(error);
-    pendingInvokes.clear();
-    for (const pending of pendingDirectoryEntries.values())
-      pending.reject(error);
-    pendingDirectoryEntries.clear();
-    outboundQueue.length = 0;
-    for (const port of messagePorts.values()) {
-      port.close();
-    }
-    messagePorts.clear();
-    scheduleReconnect();
-  });
-  socket.addEventListener("error", () => {
-    scheduleReconnect();
-  });
-}
-
-function enqueueMessage(message: RendererToMainMessage): void {
-  outboundQueue.push(message);
-  ensureSocket();
-  flushOutboundQueue();
-}
+const sendBridge = connectRenderer<RendererToMainMessage | MainToRendererMessage>(message => handleIncomingMessage(message as MainToRendererMessage));
+function enqueueMessage(message: RendererToMainMessage): void { sendBridge(message); }
 
 function nextRequestId(): string {
   requestCounter += 1;
@@ -288,6 +216,7 @@ function nextRequestId(): string {
 }
 
 function invokeMain(channel: string, args: unknown[]): Promise<unknown> {
+  args = prepareIpcArgs(args);
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
     pendingInvokes.set(requestId, { resolve, reject });
@@ -304,15 +233,6 @@ function addIpcListener(channel: string, listener: IpcListener): void {
   const listeners = rendererListeners.get(channel) ?? new Set<IpcListener>();
   listeners.add(listener);
   rendererListeners.set(channel, listeners);
-}
-
-function shouldCloseSidebarForMemoryPath(path: string): boolean {
-  return (
-    path === "/" ||
-    path.startsWith("/local/") ||
-    path === "/skills" ||
-    path === "/automations"
-  );
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -357,9 +277,10 @@ function requestWorkspaceDirectoryEntries(
 }
 
 const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
-const mobileMediaQuery = matchMedia("(max-width: 768px)");
+const mobileMediaQuery = matchMedia(MOBILE_QUERY);
 const initialSidebarState = !mobileMediaQuery.matches;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
+electronShim.transcribeAudio = transcribeAudio;
 electronShim.resumeFollowerGoal = resumeFollowerGoal;
 electronShim.followExistingOwner = followExistingOwner;
 const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
@@ -377,6 +298,7 @@ Object.assign(globalThis, {
 const initialRoute = mapBrowserPathToInitialRoute(
   window.location.pathname,
   window.location.search,
+  window.location.hash,
 );
 electronShim.initialRoute = initialRoute.memoryPath;
 
@@ -385,31 +307,14 @@ if (initialRoute.browserPath) {
 }
 
 electronShim.initialSidebarState = initialSidebarState;
+installMobileLayout(close => { electronShim.closeSidebar = close; });
+const synchronizeNavigation = createBrowserNavigationSync(initialRoute.memoryPath);
 electronShim.onMemoryNavigationChanged = (navigation) => {
-  const path = navigation.location.pathname;
-  if (
-    navigation.action !== "POP" &&
-    mobileMediaQuery.matches &&
-    shouldCloseSidebarForMemoryPath(path)
-  ) {
+  // Every actual page change closes the overlay, including Back/Forward.
+  // Query-only filter and search updates keep the drawer in its current state.
+  if (synchronizeNavigation(navigation) && mobileMediaQuery.matches) {
     electronShim.closeSidebar?.();
   }
-
-  const browserPath = mapMemoryPathToBrowserPath(path);
-  if (browserPath == null) {
-    return;
-  }
-
-  if (browserPath.titleChange) {
-    document.title = browserPath.titleChange;
-  }
-
-  if (window.location.pathname === browserPath.path) {
-    window.history.replaceState(undefined, "", browserPath.path);
-    return;
-  }
-
-  window.history.pushState(undefined, "", browserPath.path);
 };
 
 export const ipcRenderer = {
@@ -425,6 +330,7 @@ export const ipcRenderer = {
       }
 
       if (isUnhandledAddWorkspaceRootOptionMessage(args[0])) {
+        const originalMessage = args[0];
         return openSelectWorkspaceRootDialog({
           listDirectory: requestWorkspaceDirectoryEntries,
         }).then((root) => {
@@ -432,7 +338,7 @@ export const ipcRenderer = {
             return undefined;
           }
 
-          return invokeMain(channel, [{ ...args[0], type: "electron-add-new-workspace-root-option", root }]);
+          return invokeMain(channel, [{ ...originalMessage, type: "electron-add-new-workspace-root-option", root }]);
         });
       }
     }
@@ -561,10 +467,18 @@ export const ipcRenderer = {
   },
 };
 
-ensureSocket();
 
 export const contextBridge = {
   exposeInMainWorld(_key: string, _api: unknown): void {
+    if (_key === 'electronBridge' && isRecord(_api) && typeof _api.showContextMenu === 'function') {
+      const nativeMenu = _api.showContextMenu;
+      // Phones use the shipped web menu. A headless host cannot display an
+      // Electron popup; preserve the original desktop bridge at wider widths.
+      Object.defineProperty(_api, 'showContextMenu', {
+        configurable: true, enumerable: true,
+        get: () => mobileMediaQuery.matches ? undefined : nativeMenu,
+      });
+    }
     Reflect.set(window, _key, _api);
   },
 };

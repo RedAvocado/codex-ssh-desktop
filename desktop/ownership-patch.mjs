@@ -14,6 +14,13 @@ export function patchOwnership(text) {
 }
 
 export function patchOwnerFollowing(text) {
+  if(text.includes('async function Sxn(')){
+    const bridge='ipcBridge:u={setThreadOwnership:e=>qY.clientCoordination?.setThreadOwnership?.(e)??Promise.resolve()';
+    const point='let k=y;Gy(y);let A=e.useTailHydration()';
+    if(text.split(bridge).length!==2||text.split(point).length!==2)throw Error('26.911 owner attachment patch drift');
+    return text.replace(bridge,'ipcBridge:u={findThreadOwner:params=>qY.clientCoordination?.findThreadOwner(params),setThreadOwnership:e=>qY.clientCoordination?.setThreadOwnership?.(e)??Promise.resolve()')
+      .replace(point,'await window.__ELECTRON_SHIM__.followExistingOwner(e,u,o);if(!o())return{status:`not-ready`,reason:`canceled`};let k=y;Gy(y);let A=e.useTailHydration()');
+  }
   const bridge=/ipcBridge:(\w+)=\{setThreadOwnership:(\w+)=>(\w+)\.clientCoordination/;
   const resume=/let (\w+)=(\w+);US\(\2\);let (\w+)=(\w+)\.useTailHydration\(\)/;
   if([...text.matchAll(new RegExp(bridge.source,'g'))].length!==1 || [...text.matchAll(new RegExp(resume.source,'g'))].length!==1)throw Error('Owner attachment patch does not match this desktop build');
@@ -23,6 +30,11 @@ export function patchOwnerFollowing(text) {
 }
 
 export function patchConflictRecovery(text) {
+  if(text.includes('async function Sxn(')){
+    const point='}catch(t){if(!o()||(ne&&e.getStreamRole(u)?.role===`owner`&&e.setConversationStreamRole(u,null),!o())';
+    if(text.split(point).length!==2)throw Error('26.911 conflict recovery patch drift');
+    return text.replace(point,'}catch(t){if(vxn(t)&&o()){try{await window.__ELECTRON_SHIM__.followExistingOwner(e,u,o)}catch{}if(o()&&e.getStreamRole(u)?.role===`follower`){A&&e.releaseResumeNotificationBuffer(u);e.updateConversationState(u,s=>{s.resumeState=`resumed`});j?.finish();return{status:`ready`}}}if(!o()||(ne&&e.getStreamRole(u)?.role===`owner`&&e.setConversationStreamRole(u,null),!o())');
+  }
   if(text.includes('try{await window.__ELECTRON_SHIM__.followExistingOwner(e,c,a)}catch{}'))throw Error('Writer conflict recovery is already patched');
   const catchStart='}catch(t){if(!a()||(H&&e.getStreamRole(c)?.role===`owner`&&e.setConversationStreamRole(c,null),!a())';
   if(text.split(catchStart).length!==2)throw Error('Writer conflict recovery does not match this desktop build');

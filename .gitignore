@@ -1,6 +1,7 @@
 node_modules/
 scratch*/
 runtime/
+runtime-node/
 dist/
 desktop/build-info.json
 connection.json
@@ -8,7 +9,15 @@ connection.json
 .DS_Store
 __pycache__/
 *.pyc
+# Machine-specific addresses and setup observations stay on the owner's Macs.
+/PRIVATE-SETUP.md
+/accounts/
 /src/server/**/*.js
 /src/server/**/*.js.map
 /src/server/**/*.d.ts
 /src/server/**/*.d.ts.map
+
+/src/shared/**/*.js
+/src/shared/**/*.js.map
+/src/shared/**/*.d.ts
+/src/shared/**/*.d.ts.map

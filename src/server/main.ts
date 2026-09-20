@@ -20,6 +20,8 @@ import { installModuleAliasHook } from "./module";
 import { glob } from "glob";
 import {authorized, bearerToken, tokenMatches, validHost, viewerOrigin} from './access';
 import {startOutboundProxy} from './outbound-proxy';
+import {resumableBridge} from './resumable-bridge';
+import {registerLocalTranscription} from './local-transcription';
 
 type ServerOptions = {
   host: string;
@@ -421,8 +423,15 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   await startOutboundProxy(viewerToken);
   const bridgeState = getIpcMainBridgeState();
   const app = Fastify({ logger: false });
-  const websocketServer = new WebSocketServer({ noServer: true });
+  const websocketServer = new WebSocketServer({
+    noServer: true,
+    maxPayload: 32 * 1024 * 1024,
+    // Startup feature state can be several MB. Compress each message separately
+    // so a slow connection does not spend minutes retransmitting that state.
+    perMessageDeflate: {serverNoContextTakeover:true,clientNoContextTakeover:true,concurrencyLimit:2,threshold:1024,zlibDeflateOptions:{level:3}},
+  });
   let hostReady=false;
+  const pendingCalls = new Map<string,{name:string;since:number}>();
   const transport={preloadRequests:0,socketConnections:0,activeSockets:0,received:0,sent:0,registeredViews:0};
   app.addHook('onRequest',async(request,reply)=>{
     if(!validHost(request.headers.host))return reply.code(403).send({error:'Invalid host'});
@@ -437,7 +446,8 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     if(request.url==='/assets/preload.js')transport.preloadRequests++;
     reply.header('Cache-Control','no-store');
   });
-  app.get('/__health',async()=>({ready:hostReady,host:os.hostname(),pid:process.pid,version:globalThis.__CODEX_SHIM_VALUES__?.version??null,transport}));
+  let readBridgeDiagnostics: () => unknown[] = () => [];
+  app.get('/__health',async()=>({ready:hostReady,host:os.hostname(),pid:process.pid,version:globalThis.__CODEX_SHIM_VALUES__?.version??null,transport,sessions:readBridgeDiagnostics(),pending:[...pendingCalls.values()].map(p=>({name:p.name,ageMs:Date.now()-p.since}))}));
   app.post('/__external',async(request,reply)=>{
     const body=request.body as {url?:string}|null;
     let target:URL;try{target=new URL(body?.url??'');if(!['https:','http:'].includes(target.protocol))throw Error();}catch{return reply.code(400).send({error:'Invalid URL'});}
@@ -451,6 +461,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       files: 8,
     },
   });
+  registerLocalTranscription(app, path.resolve(__dirname, '../../runtime'));
 
   const uploadRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "codex-web-uploads-"),
@@ -482,11 +493,9 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     return reply.send({ files });
   });
 
-  await app.register(fastifyStatic, {
-    root: "/",
-    prefix: "/@fs/",
-    decorateReply: false,
-  });
+  // Untrusted files must never execute on the authenticated control origin.
+  // Keep previews disabled until a separate, isolated preview origin exists.
+  app.get('/@fs/*', async (_request, reply) => reply.code(403).send({error:'File previews are disabled for this private installation.'}));
 
   await app.register(fastifyStatic, {
     root: path.resolve(__dirname, "../../scratch/asar/webview"),
@@ -523,43 +532,35 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     });
   });
 
-  const rendererSockets = new Map<number, WebSocket>();
+  const rendererSockets = new Map<number, (message: MainToRendererMessage) => void>();
   const rendererWindowFactory = new Promise<() => Promise<RendererWindow>>(
     (resolve) => {
       bridgeState.setRendererWindowFactory = factory=>{hostReady=true;resolve(factory);};
     },
   );
-  bridgeState.sendToRenderer = (webContentsId, message): void => {
-    const socket = rendererSockets.get(webContentsId);
-    if (socket?.readyState === WebSocket.OPEN) {
-      transport.sent++;
-      socket.send(JSON.stringify(message));
-    }
+  bridgeState.sendToRenderer = (id, message): void => {
+    transport.sent++;
+    rendererSockets.get(id)?.(message);
   };
-
-  websocketServer.on("connection", (socket) => {
-    transport.socketConnections++;transport.activeSockets++;
+  websocketServer.on('connection', socket => {
+    transport.socketConnections++; transport.activeSockets++;
+    socket.on('close', () => transport.activeSockets--);
+  });
+  readBridgeDiagnostics = resumableBridge<RendererToMainMessage | MainToRendererMessage>(websocketServer, send => {
     let rendererWindow: RendererWindow | undefined;
-    // Each tab is a real registered app view, with its own IPC client and ownership.
-    const rendererReady = rendererWindowFactory
-      .then(async (createWindow) => {
-        if (socket.readyState !== WebSocket.OPEN) return undefined;
-        const window = await createWindow();
-        if (socket.readyState !== WebSocket.OPEN) {
-          window.destroy();
-          return undefined;
-        }
-        rendererWindow = window;
-        transport.registeredViews++;
-        rendererSockets.set(window.webContents.id, socket);
-        return window;
-      })
-      .catch((error) => {
-        console.error("[ipc-bridge] failed to create renderer window", error);
-        socket.close(1011, "Renderer initialization failed");
-        return undefined;
-      });
-
+    let disposed = false;
+    const rendererReady = rendererWindowFactory.then(async createWindow => {
+      if (disposed) return undefined;
+      const window = await createWindow();
+      if (disposed) { window.destroy(); return undefined; }
+      rendererWindow = window;
+      transport.registeredViews++;
+      rendererSockets.set(window.webContents.id, send);
+      return window;
+    }).catch(error => {
+      console.error('[ipc-bridge] renderer initialization failed', error);
+      return undefined;
+    });
     const messagePorts = new Map<string, WebSocketMessagePort>();
     const dispatchPostMessage = (
       channel: string,
@@ -581,29 +582,20 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       }
     };
 
-    socket.on("close", () => {
-      transport.activeSockets--;
-      for (const port of messagePorts.values()) {
-        port.disconnect();
-      }
+    const dispose = () => {
+      disposed = true;
+      for (const port of messagePorts.values()) port.disconnect();
       messagePorts.clear();
       if (rendererWindow) {
         rendererSockets.delete(rendererWindow.webContents.id);
         rendererWindow.destroy();
       }
-    });
-
-    socket.on("message", async (rawData) => {
+    };
+    const receive = async (input: RendererToMainMessage | MainToRendererMessage) => {
       transport.received++;
       const window = await rendererReady;
-      if (!window || socket.readyState !== WebSocket.OPEN) return;
-      let message: RendererToMainMessage;
-      try {
-        message = JSON.parse(String(rawData)) as RendererToMainMessage;
-      } catch (error) {
-        console.error("[ipc-bridge] invalid JSON payload", error);
-        return;
-      }
+      if (!window || disposed) return;
+      const message = input as RendererToMainMessage;
 
       if (message.type === "ipc-renderer-send") {
         bridgeState.handleRendererSend?.(
@@ -627,11 +619,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
           }
           const port = new WebSocketMessagePort(
             portId,
-            (message) => {
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify(message));
-              }
-            },
+            send,
             () => messagePorts.delete(portId),
           );
           messagePorts.set(portId, port);
@@ -662,9 +650,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
               ok: true,
               result,
             };
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify(payload));
-            }
+            send(payload);
           })
           .catch((error) => {
             const payload: MainToRendererMessage = {
@@ -673,15 +659,17 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
               ok: false,
               errorMessage: errorMessage(error),
             };
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify(payload));
-            }
+            send(payload);
           });
         return;
       }
 
       if (message.type === "ipc-renderer-invoke") {
         const { channel, requestId, args } = message;
+        const pendingKey = `${window.id}:${requestId}`;
+        const first = args[0] as {type?: unknown} | undefined;
+        const name = typeof first?.type === 'string' ? first.type : channel;
+        pendingCalls.set(pendingKey,{name,since:Date.now()});
         Promise.resolve(
           bridgeState.handleRendererInvoke?.(channel, args, window.id) ??
             Promise.reject(
@@ -697,9 +685,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
               ok: true,
               result,
             };
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify(payload));
-            }
+            send(payload);
           })
           .catch((error) => {
             const payload: MainToRendererMessage = {
@@ -708,12 +694,11 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
               ok: false,
               errorMessage: errorMessage(error),
             };
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify(payload));
-            }
-          });
+            send(payload);
+          }).finally(() => pendingCalls.delete(pendingKey));
       }
-    });
+    };
+    return {receive: input => {void receive(input).catch(error => console.error('[ipc-bridge] dispatch failed', error));}, dispose};
   });
 
   await app.listen({ host: options.host, port: options.port });

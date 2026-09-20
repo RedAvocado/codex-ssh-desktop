@@ -15,7 +15,8 @@ This is an independent project from DittoDub, not an official OpenAI app.
 - A separate app, profile, and connection settings.
 - SSH transport with automatic reconnection.
 - Your existing remote Codex login, task history, and projects.
-- Remote file previews and external links opened in Chrome on the remote Mac.
+- External links opened in Chrome on the remote Mac. The broad remote-file
+  preview endpoint is disabled to prevent arbitrary filesystem access.
 - **Codex SSH Desktop → Check for Updates…** checks GitHub releases, downloads
   a newer client inside the app, and offers **Install and Restart**.
 - **Accounts → Manage Accounts…** reads local and remote Codex Vitals profiles,
@@ -43,10 +44,23 @@ your SSH configuration or Codex credentials. The updater does not modify remote
 Codex or its compatibility bridge. Version 0.3 and earlier need one manual
 installation of 0.4 or later to gain in-app installation.
 
+## iPhone and private browser access
+
+Use the optional Tailscale HTTPS gateway and add **Remote Codex** to your iPhone
+Home Screen. The [phone setup and update guide](PHONE-SETUP.md) covers Safari
+installation, the compact mobile interface, allowed devices, local dictation,
+and remote configuration.
+
+The phone icon opens the version deployed on your remote Mac. Reloading picks
+up deployed changes; a GitHub push alone does **not** deploy them. The existing
+macOS release updater updates the local client shell separately.
+
 ## Compatibility
 
-The adaptation scripts currently support **Codex desktop 26.903.61454** on a
-remote Mac. Setup rejects other versions before replacing an existing build.
+The adaptation scripts support **Codex desktop 26.903.61454 and 26.911.61220**
+on a remote Mac. The mobile and local-dictation verification used 26.911.61220;
+local dictation is patched only for that version. Setup rejects other versions
+before replacing an existing build.
 Newer Codex builds need updated compatibility patches, even if the client app
 itself is current. Do not downgrade a machine with active work to try this.
 
@@ -66,12 +80,15 @@ Run these commands **on the remote Mac**:
 git clone https://github.com/RedAvocado/codex-ssh-desktop.git \
   ~/.local/share/codex-ssh-desktop
 cd ~/.local/share/codex-ssh-desktop
-git checkout v0.3.0
+git checkout main
 npm ci
 npm run prepare:desktop -- /Applications/ChatGPT.app
 npm run build:browser
 npm run build:server
+# For a prepared 26.903.61454 runtime:
 npm run test:desktop
+# For 26.911.61220, use the current-version ownership fixture instead:
+# node desktop/test-current-ownership.mjs /path/to/unpatched-26.911-renderer.js
 ```
 
 If your app is installed as `/Applications/Codex.app`, pass that path instead.

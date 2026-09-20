@@ -1,0 +1,20 @@
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const {prepareIpcArgs}=require('../src/browser/diagnostic-log.ts');
+const {ReliableChannel}=require('../src/shared/reliable-channel.js');
+test('cyclic third-party diagnostics do not prevent later task requests reaching the server',()=>{
+ const original=new Error('network bootstrap failed');
+ original.diagnosticError={rawError:original};
+ const input=[{type:'log-message',level:'error',context:{error:original}}];
+ assert.throws(()=>JSON.stringify(input),/circular/i);
+ const received=[];const server=new ReliableChannel(p=>received.push(p),()=>assert.fail());
+ const client=new ReliableChannel(()=>{},()=>assert.fail());
+ client.attach(w=>server.receive(JSON.parse(w)),0);
+ client.send({type:'ipc-renderer-invoke',args:prepareIpcArgs(input)});
+ const task=[{type:'mcp-request',request:{method:'thread/list'}}];
+ assert.equal(prepareIpcArgs(task),task);
+ client.send({type:'ipc-renderer-invoke',args:prepareIpcArgs(task)});
+ assert.equal(received.length,2);
+ assert.equal(received[0].args[0].context.error.message,'network bootstrap failed');
+ assert.equal(received[0].args[0].context.error.diagnosticError.rawError,'[Circular]');
+ assert.equal(received[1].args[0].request.method,'thread/list');
+});
