@@ -3,6 +3,7 @@ import path from 'node:path';
 import {extractAll,extractFile} from '@electron/asar';
 import {patchGoalResume} from './goal-resume-patch.mjs';
 import {patchLocalTranscription} from './transcription-patch.mjs';
+import {patchBrowserServicePath} from './plugin-path-patch.mjs';
 import {patchOwnership,patchOwnerFollowing,patchConflictRecovery} from './ownership-patch.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -38,6 +39,7 @@ main=replaceOne(main,/setWindowContext:(\w+)=>\{(\w+)=\1;for\(let (\w+) of (\w+)
 main=replaceOne(main,currentBuild?/async whenReady\(\)\{let e;if\(this\.startupReady!=null\)\{.*?return this\.includeStartupTiming\?e:void 0\}/:/async whenReady\(\)\{if\(this\.startupReady!=null\)\{.*?throw new DOMException\(`Primary renderer was replaced`,`AbortError`\)\}/,
   'async whenReady(){if(this.startupReady!=null){let e=Promise.withResolvers(),t=()=>e.reject(new DOMException(`Renderer was destroyed`,`AbortError`));this.origin.once(`destroyed`,t);try{await Promise.race([this.startupReady,e.promise])}finally{this.origin.off(`destroyed`,t)}}if(this.isDisposed||this.origin.isDestroyed())throw new DOMException(`Renderer was destroyed`,`AbortError`)}','independent view lifecycle');
 main=replaceOne(main,/encodingLevel=`structuredClonable`/,'encodingLevel=`jsonCompatible`','host port encoding');
+main=patchBrowserServicePath(main);
 fs.writeFileSync(mainPath,main);
 
 const htmlPath=path.join(out,'webview/index.html');

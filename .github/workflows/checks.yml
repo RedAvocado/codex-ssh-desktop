@@ -13,4 +13,8 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm test
+      - name: Browser adapter types
+        run: npx tsc --noEmit --target es2022 --module esnext --moduleResolution bundler --jsx react-jsx --skipLibCheck --types vite/client src/browser/shim.ts
+      - name: Private HTTPS gateway
+        run: node --test test/phone-gateway.integration.cjs
       - run: npm audit --audit-level=high

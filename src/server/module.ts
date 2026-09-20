@@ -1,7 +1,10 @@
 import Module from "node:module";
 import path from "node:path";
+import {adaptNativeAddon} from './native-compat';
+import {resolveBrowserServicePath} from './plugin-paths';
 
 export function installModuleAliasHook(): void {
+  Object.assign(globalThis, {__codexResolveBrowserService: resolveBrowserServicePath});
   const moduleWithLoad = Module as typeof Module & {
     _load: (
       request: string,
@@ -23,6 +26,6 @@ export function installModuleAliasHook(): void {
       ), parent, isMain);
     }
 
-    return originalLoad.call(this, request, parent, isMain);
+    return adaptNativeAddon(request, originalLoad.call(this, request, parent, isMain));
   };
 }

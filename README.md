@@ -207,6 +207,14 @@ live parity with the native app is not established. Queued-message deletion
 has passed isolated coordinator tests; an intermittent UI report remains
 unresolved. Some desktop integrity and telemetry requests can return HTTP 403.
 
+The viewer uses the shipped web context menus for pinning, renaming, and other
+sidebar actions. Optional native Mac app icons use fallback icons: AppKit icon
+loading inside the Node host can otherwise exhaust its I/O workers. Browser
+tool sessions resolve the installed Browser plugin's manifest version, so an
+OpenAI app update does not leave new sessions pointing at a deleted service.
+An already-running browser tool session may need a fresh turn to pick up the
+updated configuration.
+
 Account switching has synthetic credential, process, rollback, SSH-hangup, and
 Electron UI tests. Live Vitals catalog discovery and process preflight have been
 checked on macOS. A real account was not activated during development because

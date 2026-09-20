@@ -40,7 +40,9 @@ require access to that Mac.
   If **Reopen connection** appears, copy any unsent text before choosing it.
 
 Mobile layout changes apply at phone widths and short touch-only landscape
-sizes. Ordinary desktop layouts retain their full header and sidebar.
+sizes. Ordinary desktop layouts retain their full header and sidebar. Both
+sizes use the shipped web context menus because the auxiliary host cannot
+display native Electron popups.
 
 ## How updates reach the phone
 

@@ -9,6 +9,7 @@ import {
 } from "./routes";
 import {resumeFollowerGoal} from './goal-resume';
 import {followExistingOwner} from './owner-follow';
+import {browserCapabilities} from './capabilities';
 import {
   handleLocalFilePickerMessage,
   isLocalFilePickerMessage,
@@ -470,16 +471,7 @@ export const ipcRenderer = {
 
 export const contextBridge = {
   exposeInMainWorld(_key: string, _api: unknown): void {
-    if (_key === 'electronBridge' && isRecord(_api) && typeof _api.showContextMenu === 'function') {
-      const nativeMenu = _api.showContextMenu;
-      // Phones use the shipped web menu. A headless host cannot display an
-      // Electron popup; preserve the original desktop bridge at wider widths.
-      Object.defineProperty(_api, 'showContextMenu', {
-        configurable: true, enumerable: true,
-        get: () => mobileMediaQuery.matches ? undefined : nativeMenu,
-      });
-    }
-    Reflect.set(window, _key, _api);
+    Reflect.set(window, _key, browserCapabilities(_key, _api));
   },
 };
 

@@ -2,7 +2,10 @@
 
 Updated September 18, 2026.
 
-This is the original header rollout record. The September 19 follow-up audit, expanded phone-landscape breakpoint, current tests, and current deployed hash are documented in `MOBILE-USABILITY-AUDIT.md`.
+This is the original header rollout record. The later main-branch integration
+uses the shipped web context menus at desktop widths too, preserving the
+upstream fix for the headless host's nonfunctional native popup. The layout
+measurements below describe the original rollout. The September 19 follow-up audit, expanded phone-landscape breakpoint, current tests, and current deployed hash are documented in `MOBILE-USABILITY-AUDIT.md`.
 
 ## Delivered
 
