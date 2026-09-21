@@ -9,6 +9,11 @@ test('compression respects explicit quality values and wildcard fallback',()=>{
  for(const value of ['gzip','GZip;q=0.5','br, *;q=1'])assert.equal(acceptsGzip(value),true);
  for(const value of ['', 'br','gzip;q=0','gzip;q=0, *;q=1','gzip;q=invalid','gzip;q=2'])assert.equal(acceptsGzip(value),false);
 });
+test('legacy backend options cannot inject extra authentication cookies',()=>{
+ const config={origin:'https://mac.example.ts.net:8443',bindAddress:'100.64.0.10',allowedPeers:['100.64.0.20'],legacyBackend:true,backendSessionCookie:'bbw_session'};
+ assert.doesNotThrow(()=>phoneConfiguration(config));
+ for(const change of [{legacyBackend:'false'},{backendSessionCookie:''},{backendSessionCookie:'session; other=value'},{backendSessionCookie:'session\r\nX-Test: value'}])assert.throws(()=>phoneConfiguration({...config,...change}));
+});
 const origin=new URL('https://mac.example.ts.net:8443');const allowed=new Set(['100.64.0.20']);
 function request(peer='100.64.0.20'){return {method:'GET',socket:{encrypted:true,remoteAddress:peer},headers:{host:origin.host}}}
 test('only the actual allowed peer can get pages or assets; forwarded headers cannot grant access',()=>{

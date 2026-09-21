@@ -21,10 +21,17 @@ function valid(req,upgrade=false){return validPhoneRequest(req,origin,allowed,cs
 function headers(req){
  const token=fs.readFileSync(path.join(runtime,'viewer-token'),'utf8').trim();
  if(!/^[a-f0-9]{64}$/.test(token))throw Error('Backend session is unavailable');
- const h={...req.headers,host:'127.0.0.1:18314',origin:'http://127.0.0.1:18214',cookie:`remote_session=${token}`};
+ const h={...req.headers,host:'127.0.0.1:18314',origin:'http://127.0.0.1:18214',cookie:`${settings.backendSessionCookie||'remote_session'}=${token}`};
  delete h.authorization;delete h['proxy-authorization'];delete h['accept-encoding'];
  return h;
 }
+// The legacy host continues serving its exact prepared renderer. Only the
+// matching extraction's mobile preload is supplied by this sidecar gateway.
+const legacyPreload=settings.legacyBackend?fs.readFileSync(path.join(root,'scratch/asar/webview/assets/preload.js')):null;
+const legacyEtag=legacyPreload?'W/"'+crypto.createHash('sha256').update(legacyPreload).digest('hex')+'"':null;
+const legacyBridge=settings.legacyBackend?require('./phone-legacy-bridge.cjs').createLegacyPhoneBridge({
+ url:'ws://127.0.0.1:18314/__backend/ipc',headers:()=>headers({headers:{}}),
+}):null;
 function unavailable(res){
  if(res.destroyed||res.writableEnded)return;
  if(res.headersSent){res.destroy();return;}
@@ -39,6 +46,14 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
  }
  let upstreamHeaders;
  try{upstreamHeaders=headers(req);}catch{unavailable(res);return;}
+ if(legacyPreload&&req.url.split('?')[0]==='/assets/preload.js'&&['GET','HEAD'].includes(req.method)){
+  const h={'Content-Type':'text/javascript','Cache-Control':'private, max-age=0, must-revalidate','Vary':'Accept-Encoding','ETag':legacyEtag,'X-Content-Type-Options':'nosniff'};
+  if(req.headers['if-none-match']===legacyEtag){res.writeHead(304,h);res.end();return;}
+  if(req.method==='HEAD'){res.writeHead(200,h);res.end();return;}
+  if(acceptsGzip(req.headers['accept-encoding']))gzip(legacyPreload,(error,body)=>{if(error){unavailable(res);return;}if(res.destroyed||res.writableEnded)return;res.writeHead(200,{...h,'Content-Encoding':'gzip'});res.end(body)});
+  else{res.writeHead(200,h);res.end(legacyPreload)}
+  return;
+ }
  const upstream=http.request({host:'127.0.0.1',port:18314,path:req.url,method:req.method,headers:upstreamHeaders},reply=>{
   reply.on('error',()=>unavailable(res));
   reply.once('aborted',()=>unavailable(res));
@@ -74,6 +89,7 @@ server.on('upgrade',(req,client,head)=>{
  if(req.url!=='/__backend/ipc'||!valid(req,true)){client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
  let upstreamHeaders;
  try{upstreamHeaders=headers(req);}catch{client.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');return;}
+ if(legacyBridge){clearTimeout(deadline);legacyBridge.upgrade(req,client,head);return;}
  upstream=http.request({host:'127.0.0.1',port:18314,path:req.url,method:'GET',headers:upstreamHeaders});
  deadline=setTimeout(()=>{cleanup();client.destroy();},15_000);
  upstream.on('upgrade',(reply,socket,remoteHead)=>{
@@ -90,4 +106,4 @@ server.listen(Number(origin.port||443),settings.bindAddress,()=>console.log('Pri
 fs.watchFile(path.join(runtime,'phone.crt'),{interval:60000},()=>{
  try{server.setSecureContext({cert:fs.readFileSync(path.join(runtime,'phone.crt')),key:fs.readFileSync(path.join(runtime,'phone.key'))});}catch{console.error('Certificate reload failed; retaining the previous certificate.');}
 });
-for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>server.close(()=>process.exit(0)));
+for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{legacyBridge?.close();server.close(()=>process.exit(0))});

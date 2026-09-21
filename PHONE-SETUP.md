@@ -145,6 +145,33 @@ umask to `077`, and use absolute executable and repository paths. These are
 user LaunchAgents; they do not run before login. The existing installation's
 machine-specific runbook should record its service labels and paths.
 
+### Add a phone alongside an older running backend
+
+When the original unsequenced backend owns active tasks, deploy the phone
+gateway in a separate directory instead of restarting that backend. Set
+`legacyBackend: true` and `backendSessionCookie` to the existing backend's
+cookie name (the original BBW installation uses `bbw_session`) in the private
+phone configuration.
+
+Copy the running installation's prepared `scratch/asar` extraction into the
+gateway directory, then build the current server and browser there. The
+gateway serves that matching extraction's new mobile preload while forwarding
+the other assets to the original backend on loopback port 18314. Link the
+gateway's private `runtime/viewer-token` to the original token file so token
+rotation continues to apply. Keep tokens and both directories private.
+
+The adapter retains the original backend view across brief phone disconnects,
+deduplicates repeated phone messages, and replays missed responses. If the
+backend connection itself fails, it requests **Reopen connection**; it cannot
+restore an old backend view after that connection is lost.
+
+Keep maintenance pointed at the **original** runtime's control entry point.
+Do not run the default `desktop/phone-maintenance.cjs` from the sidecar, because
+its startup check would target the replacement runtime. Use a private copy
+with the original absolute control path and working directory, retaining the
+certificate renewal logic for the gateway's own certificate files. Record
+those paths and LaunchAgent labels in the ignored machine runbook.
+
 ### Optional local dictation
 
 Install FFmpeg and `whisper.cpp` on the remote Mac and obtain a compatible

@@ -20,7 +20,9 @@ function phoneConfiguration(settings) {
  const wildcard=bind==='0.0.0.0'||(isIP(bind)===6&&['[::]','[::ffff:0:0]'].includes(new URL(`http://[${bind}]`).hostname));
  if(origin.protocol!=='https:'||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash||
    !isIP(bind)||wildcard||
-   !Array.isArray(settings.allowedPeers)||!settings.allowedPeers.length||settings.allowedPeers.some(peer=>typeof peer!=='string'||!isIP(peer)))
+   !Array.isArray(settings.allowedPeers)||!settings.allowedPeers.length||settings.allowedPeers.some(peer=>typeof peer!=='string'||!isIP(peer))||
+   (settings.legacyBackend!==undefined&&typeof settings.legacyBackend!=='boolean')||
+   (settings.backendSessionCookie!==undefined&&(typeof settings.backendSessionCookie!=='string'||!/^[A-Za-z_][A-Za-z0-9_]*$/.test(settings.backendSessionCookie))))
   throw Error('Private phone configuration needs an HTTPS origin, a specific bind address, and allowed device addresses.');
  return {origin,allowed:new Set(settings.allowedPeers)};
 }
