@@ -18,7 +18,7 @@ private Tailscale HTTPS gateways, and prepared desktop version `26.911.61220`.
 
 ## Automated checks
 
-- `npm test`: 97 JavaScript tests, 24 Python tests, and viewer access checks pass.
+- `npm test`: 99 JavaScript tests, 24 Python tests, and viewer access checks pass.
 - Browser adapter TypeScript check passes; production preload build succeeds.
 - `node --test test/phone-gateway.integration.cjs`: 7 HTTPS integration tests pass.
 - Runtime dependency audit: no reported vulnerabilities.
@@ -61,3 +61,19 @@ icon still requires the gateway named in that icon's URL. Keep the other
 computer's direct URL as a fallback. Closing or reloading the whole app can
 discard unsent drafts even though ordinary computer switching preserves them.
 See [setup, privacy, and operating instructions](PHONE-SETUP.md#switch-between-your-computers).
+
+### Keyboard spacing follow-up
+
+The phone shell now uses half of the bottom safe-area inset with a black
+background, and the drawer's added footer padding is 6px instead of 12px.
+When an unzoomed touch viewport shrinks for the keyboard, the outer shell fits
+that visible area and removes its bottom inset. Closing the keyboard restores
+the smaller inset. Pinch zoom and desktop resizing do not trigger this layout.
+
+Verified in an isolated browser tab with a 34px emulated bottom safe area:
+17px black padding when closed, 0px padding and a 510px shell with simulated
+keyboard viewport metrics, and 17px after dismissal. Desktop returned to
+static positioning, 0px padding, and its original background. The two added
+regression tests cover viewport resize/scroll/dismissal and exclusion of
+browser chrome, zoom, and desktop changes. Physical iPhone keyboard behavior
+remains unverified because iPhone Mirroring reported that the Mac was locked.

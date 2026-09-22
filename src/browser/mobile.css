@@ -26,7 +26,9 @@
     padding-top: calc(48px + env(safe-area-inset-top)) !important;
     /* Keep the profile row clear of rounded corners even when the browser
        reports no bottom safe-area inset. */
-    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--color-surface, #202123) !important;
+    --ssh-drawer-bottom-space: calc(6px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: var(--ssh-drawer-bottom-space);
+    background: linear-gradient(to top, #000 var(--ssh-drawer-bottom-space), var(--color-surface, #202123) var(--ssh-drawer-bottom-space)) !important;
     transform: translateX(-110%); visibility: hidden; pointer-events: none !important;
     transition: transform 180ms ease, visibility 180ms; box-shadow: 8px 0 24px #0004;
   }

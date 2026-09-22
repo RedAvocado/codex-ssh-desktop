@@ -1,6 +1,27 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
+  // iOS keeps its layout viewport and home-indicator inset when the keyboard
+  // shrinks the visible viewport. Size the outer shell, not the host frames.
+  const viewport = window.visualViewport;
+  const touch = matchMedia('(max-width: 1024px) and (hover: none) and (pointer: coarse)');
+  function syncViewport() {
+    const root = document.documentElement;
+    const keyboard = !!viewport && touch.matches && Math.abs(viewport.scale - 1) < 0.05 && root.clientHeight - viewport.height > 120;
+    root.classList.toggle('phone-keyboard-open', keyboard);
+    if (keyboard) {
+      root.style.setProperty('--phone-visible-height', `${Math.round(viewport.height)}px`);
+      root.style.setProperty('--phone-visible-top', `${Math.max(0, Math.round(viewport.offsetTop))}px`);
+    } else {
+      root.style.removeProperty('--phone-visible-height');
+      root.style.removeProperty('--phone-visible-top');
+    }
+  }
+  viewport?.addEventListener('resize', syncViewport);
+  viewport?.addEventListener('scroll', syncViewport);
+  touch.addEventListener('change', syncViewport);
+  window.addEventListener('resize', syncViewport);
+  syncViewport();
   const frames = new Map();
   let computers = [], selected, pending, switching = false, menuOpen = false, checked = false, availabilityError = false, timer, messageTimer, optionsSignature;
   const initial = new URL(location.href);
@@ -136,7 +157,7 @@
   window.addEventListener('online', wake);
   document.addEventListener('visibilitychange', wake);
   window.addEventListener('pagehide', () => clearTimeout(timer));
-  window.addEventListener('pageshow', schedule);
+  window.addEventListener('pageshow', () => {syncViewport(); schedule();});
   refresh().then(() => {
     const wanted = requested || (firstPath !== '/' ? computers.find(c => c.origin === location.origin)?.id : preferred);
     const initialComputer = computers.find(c => c.id === wanted && c.online) || computers.find(c => c.origin === location.origin && c.online) || computers.find(c => c.online);

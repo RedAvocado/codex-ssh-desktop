@@ -2,10 +2,13 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm');
 const computers=[{id:'studio',name:'Studio',origin:'https://studio.example.ts.net:8443',online:true},{id:'laptop',name:'Laptop',origin:'https://laptop.example.ts.net:8443',online:true}];
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-async function fixture({path='/',saved={}}={}){
+async function fixture({path='/',saved={},touch=true}={}){
  let location=new URL(path,computers[0].origin),directory=computers.map(c=>({...c})),fails=false;
  const events={},storage=new Map(Object.entries(saved)),nodes={};
- const document={hidden:false,activeElement:null,getElementById:id=>nodes[id],addEventListener(){},createElement:tag=>new Element(tag)};
+ const classes=new Set(),styles=new Map(),viewportEvents={};
+ const root={clientHeight:844,classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);}},style:{setProperty:(name,value)=>styles.set(name,value),removeProperty:name=>styles.delete(name)}};
+ const viewport={height:844,offsetTop:0,scale:1,addEventListener:(name,callback)=>{viewportEvents[name]=callback;}};
+ const document={documentElement:root,hidden:false,activeElement:null,getElementById:id=>nodes[id],addEventListener(){},createElement:tag=>new Element(tag)};
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.attrs={};this.hidden=false;if(tag==='iframe')this.contentWindow={};}
   append(...children){for(const child of children){child.parent=this;this.children.push(child);}}
@@ -18,11 +21,23 @@ async function fixture({path='/',saved={}}={}){
  }
  for(const id of ['computer','computer-name','connection','computers','computer-options','availability','refresh','viewers','empty','empty-title','empty-help','retry','message'])nodes[id]=new Element(id==='computer'||id==='refresh'?'button':'div');
  nodes.computers.append(nodes['computer-options'],nodes.refresh);nodes.viewers.append(nodes.empty);
- const context={document,URL,AbortSignal,Map,JSON,console,setTimeout:()=>1,clearTimeout(){},get location(){return location;},history:{replaceState(_s,_t,path){location=new URL(path,location);}},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},window:{addEventListener:(name,callback)=>{events[name]=callback;}},fetch:async()=>{if(fails)throw Error('offline');return {ok:true,json:async()=>({computers:directory.map(c=>({...c}))})};}};
+ const context={document,URL,AbortSignal,Map,JSON,console,matchMedia:()=>({matches:touch,addEventListener(){}}),setTimeout:()=>1,clearTimeout(){},get location(){return location;},history:{replaceState(_s,_t,path){location=new URL(path,location);}},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},window:{visualViewport:viewport,addEventListener:(name,callback)=>{events[name]=callback;}},fetch:async()=>{if(fails)throw Error('offline');return {ok:true,json:async()=>({computers:directory.map(c=>({...c}))})};}};
  vm.runInNewContext(fs.readFileSync(require.resolve('../desktop/phone-shell.js'),'utf8'),context);
  await tick();await tick();
- return {nodes,events,storage,get location(){return location;},frames:()=>nodes.viewers.children.filter(c=>c.tag==='iframe'),options:()=>nodes['computer-options'].children,setOnline(id,value){directory.find(c=>c.id===id).online=value;},fail(){fails=true;},async refresh(){await nodes.refresh.onclick();await tick();},async select(id){nodes['computer-options'].children.find(c=>c.dataset.computer===id).onclick();await tick();await tick();}};
+ return {nodes,events,storage,classes,styles,viewport,viewportEvents,get location(){return location;},frames:()=>nodes.viewers.children.filter(c=>c.tag==='iframe'),options:()=>nodes['computer-options'].children,setOnline(id,value){directory.find(c=>c.id===id).online=value;},fail(){fails=true;},async refresh(){await nodes.refresh.onclick();await tick();},async select(id){nodes['computer-options'].children.find(c=>c.dataset.computer===id).onclick();await tick();await tick();}};
 }
+test('phone keyboard resizes the visible shell and restores it on dismissal',async()=>{
+ const f=await fixture(),frame=f.frames()[0];
+ f.viewport.height=510;f.viewport.offsetTop=24;f.viewportEvents.resize();
+ assert.ok(f.classes.has('phone-keyboard-open'));assert.equal(f.styles.get('--phone-visible-height'),'510px');assert.equal(f.styles.get('--phone-visible-top'),'24px');
+ f.viewport.offsetTop=0;f.viewportEvents.scroll();assert.equal(f.styles.get('--phone-visible-top'),'0px');
+ f.viewport.height=844;f.viewportEvents.resize();assert.equal(f.classes.has('phone-keyboard-open'),false);assert.equal(f.styles.size,0);assert.equal(f.frames()[0],frame);
+});
+test('browser chrome, pinch zoom and desktop sizing do not trigger phone keyboard layout',async()=>{
+ const phone=await fixture();phone.viewport.height=770;phone.viewportEvents.resize();assert.equal(phone.classes.size,0);
+ phone.viewport.height=422;phone.viewport.scale=2;phone.viewportEvents.resize();assert.equal(phone.classes.size,0);
+ const desktop=await fixture({touch:false});desktop.viewport.height=500;desktop.viewportEvents.resize();assert.equal(desktop.classes.size,0);assert.equal(desktop.styles.size,0);
+});
 test('switching retains separate frame instances and never replaces a draft',async()=>{
  const f=await fixture(),first=f.frames()[0];first.draft='keep studio input';
  await f.select('laptop');const second=f.frames()[1];second.draft='keep laptop input';
