@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Remote Codex">
+  <meta name="theme-color" content="#202123">
+  <title>Remote Codex</title>
+  <link rel="stylesheet" href="/__phone/shell.css">
+  <script src="/__phone/shell.js" defer></script>
+</head>
+<body>
+  <header>
+    <button id="computer" type="button" aria-label="Switch computer" aria-haspopup="dialog" aria-expanded="false" aria-controls="computers">
+      <span id="computer-name">Connecting…</span><span aria-hidden="true">⌄</span>
+    </button>
+    <span id="connection" role="status"></span>
+  </header>
+  <div id="computers" role="dialog" aria-label="Switch computer" hidden>
+    <div class="menu-title">Computers</div>
+    <div id="computer-options"></div>
+    <p id="availability">Checking availability…</p>
+    <button id="refresh" type="button">Check again</button>
+  </div>
+  <main id="viewers" aria-label="Selected computer">
+    <div id="empty" role="status"><strong id="empty-title">Connecting to your computer…</strong><p id="empty-help">This may take a moment.</p><button id="retry" type="button">Check again</button></div>
+  </main>
+  <p id="message" role="status" hidden></p>
+</body>
+</html>

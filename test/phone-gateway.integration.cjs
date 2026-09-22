@@ -1,15 +1,16 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http'),https=require('node:https'),{once}=require('node:events'),{spawn,execFileSync}=require('node:child_process'),{gunzipSync}=require('node:zlib');
 const {WebSocket,WebSocketServer}=require('ws'),{randomUUID}=require('node:crypto');
-async function fixture(t,{legacy=false}={}){
+async function fixture(t,{legacy=false,computerMode=false}={}){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'private-phone-gateway-'));fs.mkdirSync(path.join(root,'desktop'));fs.mkdirSync(path.join(root,'runtime'));
- for(const name of ['phone-gateway.cjs','phone-policy.cjs','phone-legacy-bridge.cjs'])fs.copyFileSync(path.join(__dirname,'../desktop',name),path.join(root,'desktop',name));
+ for(const name of ['phone-gateway.cjs','phone-policy.cjs','phone-legacy-bridge.cjs','phone-computers.cjs','phone-shell.html','phone-shell.js','phone-shell.css'])fs.copyFileSync(path.join(__dirname,'../desktop',name),path.join(root,'desktop',name));
  fs.mkdirSync(path.join(root,'src/server'),{recursive:true});
  for(const name of ['local-transcription.js','access.js','resumable-bridge.js'])fs.copyFileSync(path.join(__dirname,'../src/server',name),path.join(root,'src/server',name));
  fs.mkdirSync(path.join(root,'src/shared'));fs.copyFileSync(path.join(__dirname,'../src/shared/reliable-channel.js'),path.join(root,'src/shared/reliable-channel.js'));
  fs.symlinkSync(path.resolve(__dirname,'../node_modules'),path.join(root,'node_modules'),'dir');
  execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',path.join(root,'runtime/phone.key'),'-out',path.join(root,'runtime/phone.crt'),'-days','1','-subj','/CN=127.0.0.1','-addext','subjectAltName=IP:127.0.0.1'],{stdio:'ignore'});
  const origin='https://127.0.0.1:18443';fs.writeFileSync(path.join(root,'runtime/phone-config.json'),JSON.stringify({origin,allowedPeers:['127.0.0.1'],bindAddress:'127.0.0.1',legacyBackend:legacy,backendSessionCookie:legacy?'legacy_session':'remote_session'}));fs.writeFileSync(path.join(root,'runtime/viewer-token'),'a'.repeat(64));
+ if(computerMode){const file=path.join(root,'runtime/phone-config.json'),config=JSON.parse(fs.readFileSync(file));config.computers=[{id:'studio',name:'Studio',origin}];config.frameAncestors=['https://laptop.example.ts.net:8443'];fs.writeFileSync(file,JSON.stringify(config));}
  fs.mkdirSync(path.join(root,'scratch/asar/webview/assets'),{recursive:true});fs.writeFileSync(path.join(root,'scratch/asar/webview/assets/preload.js'),'/* matching mobile preload */');
  const source='/* test code */\n'.repeat(10000);
  const backend=http.createServer((req,res)=>{
@@ -20,7 +21,8 @@ async function fixture(t,{legacy=false}={}){
   }else if(req.url==='/assets/test.js'){
    if(req.headers['if-none-match']==='"fixture"'){res.writeHead(304,{etag:'"fixture"'});res.end();return;}
    res.writeHead(200,{'content-type':'text/javascript',etag:'"fixture"','content-length':Buffer.byteLength(source)});res.end(source);
-  }else if(req.url==='/api'){res.setHeader('content-type','application/json');res.end('{"private":"test"}')}
+  }else if(req.url==='/__health'){res.setHeader('content-type','application/json');res.end('{"ready":true,"private":"must not escape health"}')}
+  else if(req.url==='/api'){res.setHeader('content-type','application/json');res.end('{"private":"test"}')}
   else{res.setHeader('content-type','text/html');res.end('<html>ws://127.0.0.1:18214</html>')}
  });
  const upstreamSockets=new WebSocketServer({server:backend}),commands=[];let views=0;
@@ -35,7 +37,7 @@ async function fixture(t,{legacy=false}={}){
  const gatewayFile=path.join(root,'desktop/phone-gateway.cjs');
  const gatewaySource=fs.readFileSync(gatewayFile,'utf8');
  assert.equal(gatewaySource.split('port:18314').length-1,2);
- fs.writeFileSync(gatewayFile,gatewaySource.replaceAll('port:18314',`port:${backend.address().port}`).replace('ws://127.0.0.1:18314/__backend/ipc',`ws://127.0.0.1:${backend.address().port}/__backend/ipc`));
+ fs.writeFileSync(gatewayFile,gatewaySource.replaceAll('port:18314',`port:${backend.address().port}`).replace('ws://127.0.0.1:18314/__backend/ipc',`ws://127.0.0.1:${backend.address().port}/__backend/ipc`).replace('http://127.0.0.1:18314/__health',`http://127.0.0.1:${backend.address().port}/__health`));
  const child=spawn(process.execPath,[path.join(root,'desktop/phone-gateway.cjs')],{stdio:['ignore','pipe','pipe']});
  t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await once(child,'exit')}for(const socket of upstreamSockets.clients)socket.terminate();upstreamSockets.close();backend.closeAllConnections();await new Promise(resolve=>backend.close(resolve));fs.rmSync(root,{recursive:true,force:true})});
  await Promise.race([once(child.stdout,'data'),once(child,'exit').then(()=>{throw Error('Gateway exited')})]);
@@ -107,4 +109,27 @@ test('legacy sidecar serves the mobile preload and retains one backend view acro
  for(const socket of f.upstreamSockets.clients)socket.close();
  await until(()=>client.frames.some(f=>f.type==='bridge-reset'));
  client.socket.terminate();
+});
+
+test('computer shell stays available during backend failure and embeds only configured origins',async t=>{
+ const {request,root,origin,ca}=await fixture(t,{computerMode:true});
+ const page=await request('/thread/task-a',{accept:'text/html'});
+ assert.match(page.body.toString(),/Switch computer/);
+ assert.match(page.headers['content-security-policy'],/frame-ancestors 'none'/);
+ const health=await request('/__phone/health');assert.deepEqual(JSON.parse(health.body),{ready:true});
+ const {probeComputer}=require('../desktop/phone-computers.cjs');
+ assert.equal(await probeComputer(origin,{address:'127.0.0.1',ca}),true);
+ assert.equal(await probeComputer(origin.replace('127.0.0.1','wrong-host.invalid'),{address:'127.0.0.1',ca}),false,'a fixed probe address must not bypass TLS hostname validation');
+ const list=await request('/__phone/computers');assert.deepEqual(JSON.parse(list.body).computers,[{id:'studio',name:'Studio',origin,online:true}]);
+ assert.equal(list.headers['cache-control'],'no-store');
+ const viewer=await request('/__phone/viewer?path=%2Fthread%2Ftask-a');
+ assert.match(viewer.body.toString(),/wss:/);assert.match(viewer.headers['content-security-policy'],/https:\/\/laptop.example.ts.net:8443/);
+ assert.equal(viewer.headers['x-frame-options'],undefined);
+ assert.ok(viewer.headers['set-cookie'][0].includes('HttpOnly'));
+ assert.equal((await request('/__phone/computers',{origin:'https://untrusted.example'})).status,403);
+ assert.equal((await request('/__phone/shell.js')).headers['content-type'],'text/javascript');
+ fs.unlinkSync(path.join(root,'runtime/viewer-token'));
+ assert.match((await request('/')).body.toString(),/Switch computer/);
+ assert.deepEqual(JSON.parse((await request('/__phone/health')).body),{ready:false});
+ assert.equal((await request('/__phone/viewer')).status,503);
 });

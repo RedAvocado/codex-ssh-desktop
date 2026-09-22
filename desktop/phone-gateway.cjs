@@ -2,11 +2,13 @@
 // never client-supplied forwarding headers. TLS keys stay in the private runtime.
 const http=require('node:http'),https=require('node:https'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {validPhoneRequest,staticAsset,phoneConfiguration,acceptsGzip}=require('./phone-policy.cjs');
+const {computerConfiguration,computerDirectory}=require('./phone-computers.cjs');
 const {createGzip,gzip}=require('node:zlib');
 const {pipeline}=require('node:stream');
 const root=path.resolve(__dirname,'..'),runtime=path.join(root,'runtime');
 const settings=JSON.parse(fs.readFileSync(path.join(runtime,'phone-config.json'),'utf8'));
 const {origin,allowed}=phoneConfiguration(settings);
+const {computers,frameAncestors}=computerConfiguration(settings);
 // Keep local speech processing in the already-authorized gateway, without a
 // second listener or restarting the task backend to update the phone feature.
 const transcriptionApp=require('fastify')({logger:false});
@@ -25,6 +27,18 @@ function headers(req){
  delete h.authorization;delete h['proxy-authorization'];delete h['accept-encoding'];
  return h;
 }
+async function localReady(){
+ try {
+  const response=await fetch('http://127.0.0.1:18314/__health',{headers:headers({headers:{}}),signal:AbortSignal.timeout(1500)});
+  return response.ok&&(await response.json()).ready===true;
+ }catch{return false;}
+}
+const directory=computerDirectory(computers,origin.origin,localReady);
+const shellFiles=new Map([['/__phone/shell.js',['phone-shell.js','text/javascript']],['/__phone/shell.css',['phone-shell.css','text/css']]]);
+function privateResponse(res,type,body,head=false,extra={}){
+ if(res.destroyed||res.writableEnded)return;
+ res.writeHead(200,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',...extra});res.end(head?undefined:body);
+}
 // The legacy host continues serving its exact prepared renderer. Only the
 // matching extraction's mobile preload is supplied by this sidecar gateway.
 const legacyPreload=settings.legacyBackend?fs.readFileSync(path.join(root,'scratch/asar/webview/assets/preload.js')):null;
@@ -41,6 +55,24 @@ function unavailable(res){
 const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.crt')),key:fs.readFileSync(path.join(runtime,'phone.key'))},(req,res)=>{
  if(!valid(req)){console.warn('Phone request denied',JSON.stringify({peer:req.socket.remoteAddress,hostMatches:req.headers.host===origin.host,originMatches:!req.headers.origin||req.headers.origin===origin.origin,fetchSite:req.headers['sec-fetch-site'],tls:!!req.socket.encrypted}));res.writeHead(403,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('This viewer is restricted to your configured Tailscale devices.');return;}
  if(!req.url?.startsWith('/')||req.url.startsWith('//')||req.url.startsWith('/__session')){res.writeHead(403);res.end();return;}
+ const pathname=req.url.split('?')[0];
+ if(['GET','HEAD'].includes(req.method)){
+  if(pathname==='/__phone/health'){
+   localReady().then(ready=>privateResponse(res,'application/json',JSON.stringify({ready}),req.method==='HEAD'));return;
+  }
+  if(pathname==='/__phone/computers'){
+   directory().then(list=>privateResponse(res,'application/json',JSON.stringify({computers:list}),req.method==='HEAD'));return;
+  }
+  if(shellFiles.has(pathname)){
+   const [file,type]=shellFiles.get(pathname);privateResponse(res,type,fs.readFileSync(path.join(__dirname,file)),req.method==='HEAD');return;
+  }
+  if(computers.length && !/^\/(?:__|assets\/|@fs\/)/.test(pathname) && (pathname==='/'||String(req.headers.accept).includes('text/html'))){
+   privateResponse(res,'text/html',fs.readFileSync(path.join(__dirname,'phone-shell.html')),req.method==='HEAD',{
+    'Content-Security-Policy':`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src ${computers.map(c=>c.origin).join(' ')}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+    'X-Frame-Options':'DENY',
+   });return;
+  }
+ }
  if(req.url==='/__backend/transcribe'&&req.method==='POST'){
   transcriptionReady.then(()=>transcriptionApp.routing(req,res)).catch(()=>{res.writeHead(503,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify({error:'Local dictation is unavailable.'}));});return;
  }
@@ -54,7 +86,7 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
   else{res.writeHead(200,h);res.end(legacyPreload)}
   return;
  }
- const upstream=http.request({host:'127.0.0.1',port:18314,path:req.url,method:req.method,headers:upstreamHeaders},reply=>{
+ const upstream=http.request({host:'127.0.0.1',port:18314,path:pathname==='/__phone/viewer'?'/':req.url,method:req.method,headers:upstreamHeaders},reply=>{
   reply.on('error',()=>unavailable(res));
   reply.once('aborted',()=>unavailable(res));
   const h={...reply.headers,'cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY'};
@@ -64,6 +96,10 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
   if(asset){h['cache-control']='private, max-age=0, must-revalidate';h.vary='Accept-Encoding';}
 
   if(String(h['content-type']).includes('text/html')){
+   // Only explicitly configured private gateways can embed a viewer. Keep
+   // cross-origin mutation checks unchanged inside each independent origin.
+   delete h['x-frame-options'];
+   h['content-security-policy']=`frame-ancestors ${frameAncestors.join(' ')}`;
    const chunks=[];reply.on('data',chunk=>chunks.push(chunk));reply.on('end',()=>{
     if(res.destroyed||res.writableEnded)return;
     const body=Buffer.from(Buffer.concat(chunks).toString().replace('ws://127.0.0.1:18214',`ws://127.0.0.1:18214 wss://${origin.host}`));

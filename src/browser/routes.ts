@@ -19,6 +19,10 @@ function suffix(search: string, hash: string): string {
 }
 
 export function mapBrowserPathToInitialRoute(pathname: string, search: string, hash = '') {
+  if (pathname === '/__phone/viewer') {
+    const route = frameRoute(search);
+    return mapBrowserPathToInitialRoute(route.pathname, route.search, route.hash);
+  }
   if (pathname === "/share/receive" && search) {
     const params = new URLSearchParams(search);
 
@@ -40,6 +44,21 @@ export function mapBrowserPathToInitialRoute(pathname: string, search: string, h
   return {
     memoryPath: mapBrowserPathToRoute(pathname, search, hash),
   };
+}
+
+// The outer Home Screen shell stays on its original origin. Each computer's
+// iframe retains a separate history and renderer, including unsent drafts.
+function frameRoute(search: string): URL {
+  const path = new URLSearchParams(search).get('path') || '/';
+  if (!path.startsWith('/') || path.startsWith('//') || /[\\\u0000-\u001f]/.test(path)) return new URL('https://viewer.invalid/');
+  const route = new URL(path, 'https://viewer.invalid');
+  if (route.pathname === '/__phone/viewer') return new URL('https://viewer.invalid/');
+  return route;
+}
+export function phoneFramePath(path: string, parent?: string | null): string {
+  const params = new URLSearchParams({path});
+  if (parent) params.set('parent', parent);
+  return '/__phone/viewer?' + params;
 }
 
 function mapBrowserPathToRoute(pathname: string, search = '', hash = ''): string {
@@ -81,6 +100,8 @@ type Navigation = {
 // this page's entries so native Back/Forward can use the matching browser entry;
 // a browser-originated pop already has the destination URL and is a no-op here.
 export function createBrowserNavigationSync(initialMemoryPath: string, browser: Pick<Window, 'history' | 'location' | 'document' | 'addEventListener' | 'dispatchEvent'> = window) {
+  const framed = browser.location.pathname === '/__phone/viewer';
+  const parentOrigin = framed ? new URLSearchParams(browser.location.search).get('parent') : null;
   const key = '__codexViewerHistoryIndex';
   const currentUrl = () => browser.location.pathname + browser.location.search + browser.location.hash;
   const state = () => browser.history.state && typeof browser.history.state === 'object' ? browser.history.state : {};
@@ -94,7 +115,8 @@ export function createBrowserNavigationSync(initialMemoryPath: string, browser: 
     // The renderer has already performed this Back/Forward. Sending it another
     // navigate message would push a duplicate and discard its forward history.
     if (expected === currentUrl()) return;
-    dispatchNavigateToRoute(mapBrowserPathToRoute(browser.location.pathname, browser.location.search, browser.location.hash), browser);
+    const route = framed ? frameRoute(browser.location.search) : browser.location;
+    dispatchNavigateToRoute(mapBrowserPathToRoute(route.pathname, route.search, route.hash), browser);
   });
   browser.history.replaceState({...state(), [key]: index()}, '', currentUrl());
   return (navigation: Navigation): boolean => {
@@ -103,6 +125,7 @@ export function createBrowserNavigationSync(initialMemoryPath: string, browser: 
     previousPathname = pathname;
     const target = mapMemoryPathToBrowserPath(pathname, search, hash);
     if (!target) return changedPath;
+    if (framed) target.path = phoneFramePath(target.path, parentOrigin);
     if ('titleChange' in target) browser.document.title = target.titleChange!;
     const here = index();
     if (target.path === currentUrl()) { entries.set(here, target.path); return changedPath; }

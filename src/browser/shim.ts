@@ -6,6 +6,8 @@ import {prepareIpcArgs} from './diagnostic-log';
 import {
   mapBrowserPathToInitialRoute,
   createBrowserNavigationSync,
+  phoneFramePath,
+  mapMemoryPathToBrowserPath,
 } from "./routes";
 import {resumeFollowerGoal} from './goal-resume';
 import {followExistingOwner} from './owner-follow';
@@ -315,10 +317,18 @@ const initialRoute = mapBrowserPathToInitialRoute(
   window.location.search,
   window.location.hash,
 );
+const phoneParent = window.location.pathname === '/__phone/viewer' ? new URLSearchParams(window.location.search).get('parent') : null;
+const notifyPhoneShell = (path: string) => {
+  if (!phoneParent || window.parent === window) return;
+  try {
+    const parent = new URL(phoneParent);
+    if (parent.protocol === 'https:' && parent.origin === phoneParent) window.parent.postMessage({type:'codex-computer-route', path}, parent.origin);
+  } catch { /* A malformed frame link cannot choose a message destination. */ }
+};
 electronShim.initialRoute = initialRoute.memoryPath;
 
 if (initialRoute.browserPath) {
-  window.history.pushState(undefined, "", initialRoute.browserPath);
+  window.history.replaceState(undefined, "", window.location.pathname === '/__phone/viewer' ? phoneFramePath(initialRoute.browserPath, phoneParent) : initialRoute.browserPath);
 }
 
 electronShim.initialSidebarState = initialSidebarState;
@@ -330,6 +340,9 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
   if (synchronizeNavigation(navigation) && mobileMediaQuery.matches) {
     electronShim.closeSidebar?.();
   }
+  const {pathname, search, hash} = navigation.location;
+  const route = mapMemoryPathToBrowserPath(pathname, search, hash);
+  if (route) notifyPhoneShell(route.path);
 };
 
 export const ipcRenderer = {

@@ -96,3 +96,20 @@ test('renderer replacement and unmatched POP replace the current entry, retainin
   assert.equal(stack.length, 1);
   assert.equal(browser.history.state.other, 'preserved');
 });
+
+test('embedded computer routes retain their frame boundary through navigation and reload', () => {
+  const {phoneFramePath}=require('../src/browser/routes.ts');
+  const path=phoneFramePath('/thread/task-a?projectId=one#turn-2','https://studio.example.ts.net:8443');
+  const url=new URL(path,'https://viewer.test');
+  assert.equal(mapBrowserPathToInitialRoute(url.pathname,url.search).memoryPath,'/local/task-a?projectId=one#turn-2');
+  const f=browserAt(path),sync=createBrowserNavigationSync('/local/task-a?projectId=one#turn-2',f.browser);
+  sync(nav('/skills/plugins'));
+  assert.equal(f.browser.location.pathname,'/__phone/viewer');
+  assert.equal(f.browser.location.searchParams.get('path'),'/skills/plugins');
+  assert.equal(f.browser.location.searchParams.get('parent'),'https://studio.example.ts.net:8443');
+  sync(nav('/local/task-a?projectId=one#turn-2','POP',-1));
+  assert.deepEqual(f.calls.at(-1),['go',-1]);
+  f.forward();assert.equal(f.messages.at(-1).path,'/skills/plugins');
+  for(const bad of ['https://evil.test','//evil.test','/\\evil.test','/__phone/viewer?path=/__phone/viewer','/__session'])
+    assert.equal(mapBrowserPathToInitialRoute('/__phone/viewer','?'+new URLSearchParams({path:bad})).memoryPath,'/');
+});

@@ -49,7 +49,9 @@ installation of 0.4 or later to gain in-app installation.
 Use the optional Tailscale HTTPS gateway and add **Remote Codex** to your iPhone
 Home Screen. The [phone setup and update guide](PHONE-SETUP.md) covers Safari
 installation, the compact mobile interface, allowed devices, local dictation,
-and remote configuration.
+and remote configuration. Configure multiple private gateways to switch between
+online Macs from the same Home Screen app, with a separate view and draft for
+each computer.
 
 The phone icon opens the version deployed on your remote Mac. Reloading picks
 up deployed changes; a GitHub push alone does **not** deploy them. The existing

@@ -27,6 +27,10 @@ require access to that Mac.
 
 ## Use it
 
+- If multiple computers are configured, tap the computer name at the top and
+  choose an online Mac. Each Mac has its own tasks, projects, files, and account.
+  Switching keeps both views open, including unsent drafts. A full app close or
+  reload can still discard unsent input, so save important drafts first.
 - **☰** on the far left opens the project/task drawer. Swipe within the drawer
   to scroll, then tap a task to open it and close the drawer.
 - The phone header shows the page or task name. **•••** contains the available
@@ -43,6 +47,94 @@ Mobile layout changes apply at phone widths and short touch-only landscape
 sizes. Ordinary desktop layouts retain their full header and sidebar. Both
 sizes use the shipped web context menus because the auxiliary host cannot
 display native Electron popups.
+
+## Switch between your computers
+
+The optional computer menu keeps all of your viewers inside the same Home
+Screen app. Your phone connects directly to each selected Mac's private HTTPS
+gateway over Tailscale. The starting gateway only serves the small switcher
+and checks availability; it does not proxy the other Mac's conversations or
+copy its Codex credentials. No cloud relay or public tunnel is added.
+
+Only computers whose gateway and task backend report ready are offered as
+switch destinations. Availability refreshes every 15 seconds while the app is
+visible and again when opening the menu or switching (server checks can be
+cached for two seconds). **Check again** requests a fresh client check. A Mac
+that goes offline while selected stays visible with an Offline label, so you
+can copy its draft or choose another online computer. A failure to reach the
+starting gateway is labeled Availability unknown. The app does not move or
+resubmit your work to another host.
+
+The selected computer and each computer's last page are remembered for the
+browser session. Computer views are separate frames with separate origins,
+cookies, task navigation, and draft state. The existing desktop SSH client
+keeps its original interface; the private browser viewer adds only the small
+computer bar above its existing desktop or mobile layout.
+
+### Configure a second Mac
+
+1. Install and prepare a supported auxiliary viewer and private phone gateway
+   on the second Mac. Each Mac uses its own Codex login, `runtime/` secrets,
+   TLS certificate, and loopback backend. Do not copy an account store,
+   `viewer-token`, `phone-session`, or TLS private key between computers.
+2. Add your phone and own viewing computers to each gateway's exact
+   `allowedPeers` list. Also allow the other configured gateway's Tailscale
+   address so it can perform readiness checks. This trusts that owner-operated
+   device for viewer access; it does not authorize the entire tailnet.
+3. Give both gateways the same `computers` list and allow the other gateway as
+   a frame ancestor. Keep all gateways on the same Tailscale DNS suffix so
+   Safari treats the framed viewers as same-site and can use their private
+   cookies. Certificates must be valid for each gateway's DNS hostname.
+
+For example, extend the studio Mac's private `phone-config.json`:
+
+```json
+{
+  "origin": "https://studio.your-tailnet.ts.net:8443",
+  "bindAddress": "100.64.0.10",
+  "allowedPeers": ["100.64.0.20", "100.64.0.30"],
+  "frameAncestors": ["https://laptop.your-tailnet.ts.net:8443"],
+  "computers": [
+    {
+      "id": "studio",
+      "name": "Studio Mac",
+      "origin": "https://studio.your-tailnet.ts.net:8443",
+      "probeAddress": "100.64.0.10"
+    },
+    {
+      "id": "laptop",
+      "name": "Laptop",
+      "origin": "https://laptop.your-tailnet.ts.net:8443",
+      "probeAddress": "100.64.0.30"
+    }
+  ]
+}
+```
+
+On the laptop, use its own origin and bind address, put the studio address and
+your phone in its allowlist, and put the studio origin in `frameAncestors`.
+IDs and origins must be unique, names must be nonempty, and the list must
+include the gateway serving it. At most eight computers are supported.
+`probeAddress` is an optional fixed Tailscale IP for host-to-host checks when
+MagicDNS is unavailable on a Mac. It preserves TLS hostname and certificate
+validation; it does not change the phone's destination or disable HTTPS checks.
+
+4. Deploy the browser preload built from the same revision on both Macs, along
+   with `phone-gateway.cjs`, `phone-computers.cjs`, and the `phone-shell.*` files.
+   Restart the affected gateways, preserving their existing session files.
+5. Confirm that both `/__phone/health` endpoints return `{"ready":true}` from
+   an allowed device, then open the normal gateway URL and exercise the menu.
+   Test a draft on each computer, offline removal, reconnect, and a reload.
+6. Reload the existing phone app to get the new switcher. The Home Screen icon
+   and original URL stay the same.
+
+A Mac is available only while awake, signed in, and connected. Closing a
+laptop may make it unavailable unless it is already configured to stay awake.
+The gateway whose URL the Home Screen icon opens must itself be reachable to
+start that app. Keep the other Mac's direct URL as a fallback; both gateways
+can show the same computer menu. An already-open view of the other Mac can
+remain usable when the starting gateway disappears, but its menu cannot check
+new destinations until the starting gateway returns.
 
 ## How updates reach the phone
 
