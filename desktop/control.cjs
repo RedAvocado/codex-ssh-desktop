@@ -3,6 +3,7 @@ const path=require('node:path');
 const os=require('node:os');
 const crypto=require('node:crypto');
 const {spawn,execFileSync}=require('node:child_process');
+const {findCodexCli}=require('./engine-path.cjs');
 const root=path.resolve(__dirname,'..');
 const state=path.join(root,'runtime');
 const tokenPath=path.join(state,'viewer-token');
@@ -40,14 +41,14 @@ async function run(){
     }
     const build=JSON.parse(fs.readFileSync(path.join(__dirname,'build-info.json'),'utf8'));
     const resources=path.join(build.app,'Contents/Resources');
-    if(!fs.existsSync(path.join(resources,'codex')))throw Error('The installed desktop engine could not be found.');
+    const cli=findCodexCli(resources);
     const profile=path.join(state,'electron-profile');fs.mkdirSync(profile,{recursive:true,mode:0o700});
     const globalState=path.join(os.homedir(),'.codex/.codex-global-state.json'),backup=path.join(state,'global-state-before-viewer.json');
     if(fs.existsSync(globalState)&&!fs.existsSync(backup)){fs.copyFileSync(globalState,backup,fs.constants.COPYFILE_EXCL);fs.chmodSync(backup,0o600)}
     const log=fs.openSync(path.join(state,'server.log'),'a',0o600);
     const child=spawn(process.execPath,[path.join(root,'src/server/main.js'),'--host','127.0.0.1','--port','18314'],{
       cwd:root,detached:true,stdio:['ignore',log,log],env:{...process.env,
-        CODEX_HOME:path.join(os.homedir(),'.codex'),CODEX_CLI_PATH:path.join(resources,'codex'),
+        CODEX_HOME:path.join(os.homedir(),'.codex'),CODEX_CLI_PATH:cli,
         CODEX_ELECTRON_USER_DATA_PATH:profile,CODEX_ELECTRON_RESOURCES_PATH:resources,
         CODEX_ELECTRON_START_IN_BACKGROUND:'1',CODEX_APP_SERVER_FORCE_CLI:'1',
         CODEX_REMOTE_DESKTOP_RESOURCES:resources,CODEX_REMOTE_VIEWER_TOKEN_FILE:tokenPath,

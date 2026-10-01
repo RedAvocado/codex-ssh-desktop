@@ -150,6 +150,18 @@ The phone maintenance job checks runtime health and renews the HTTPS
 certificate; it does not pull Git, build new code, or install releases.
 Runtime startup uses the same interprocess lock as account switching, so
 maintenance cannot restart the auxiliary host during a credential change.
+
+If a viewer opens but a task says **“hit a snag,”** check `runtime/server.log`
+for `Unable to locate the Codex CLI binary`. A green `control.cjs status` only
+confirms the web host responded; it does not prove its task engine initialized.
+At startup, `desktop/control.cjs` now verifies the CLI's app-server support and
+uses the current native app's `Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`,
+the earlier `Resources/codex`, or an installed Homebrew Codex CLI. Deploy
+`desktop/control.cjs` together with `desktop/engine-path.cjs`. If the running
+backend still has an obsolete CLI path, finish or preserve active work before
+restarting only that auxiliary backend; the gateway and private credentials do
+not need replacing. Afterward, confirm `Codex CLI initialized` in the new log
+entries and open a real task, since gateway health alone can miss this failure.
 GitHub CI checks source changes and the packaging workflow builds a macOS
 client on request. Neither workflow connects to your remote Mac.
 
