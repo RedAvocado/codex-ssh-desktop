@@ -23,7 +23,8 @@
   window.addEventListener('resize', syncViewport);
   syncViewport();
   const frames = new Map();
-  let computers = [], selected, pending, switching = false, menuOpen = false, checked = false, availabilityError = false, timer, messageTimer, optionsSignature;
+  const readyFrames = new WeakSet();
+  let computers = [], selected, pending, switching = false, menuOpen = false, checked = false, availabilityError = false, timer, messageTimer, optionsSignature, menuReturn;
   const initial = new URL(location.href);
   const requested = initial.searchParams.get('computer');
   const firstPath = requested ? '/' : location.pathname + location.search + location.hash;
@@ -37,11 +38,22 @@
     url.searchParams.set('path', safePath(routes[selected]));
     history.replaceState(null, '', url.pathname + url.search + url.hash);
   }
-  function menu(open, focus = false) {
+  function menu(open, focus = false, source) {
+    if (open) menuReturn = source;
     menuOpen = open; $('computers').hidden = !open;
     $('computer').setAttribute('aria-expanded', String(open));
+    $('computers').dataset.placement = source?.placement || '';
     for (const frame of frames.values()) frame.inert = open;
-    if (focus) (open ? $('computer-options').querySelector('button:not(:disabled)') || $('refresh') : $('computer')).focus();
+    if (focus) {
+      if (open) ($('computer-options').querySelector('button:not(:disabled)') || $('refresh')).focus();
+      else if (menuReturn && menuReturn.id === selected) menuReturn.window.postMessage({type:'codex-computer-focus'}, menuReturn.origin);
+      else $('computer').focus();
+    }
+    if (!open) menuReturn = undefined;
+  }
+  function sendState(computer) {
+    const frame = computer && frames.get(computer.id);
+    if (frame?.contentWindow && readyFrames.has(frame)) frame.contentWindow.postMessage({type:'codex-computer-state', name:computer.name}, computer.origin);
   }
   function say(text) {
     clearTimeout(messageTimer); $('message').textContent = text; $('message').hidden = false;
@@ -50,6 +62,7 @@
   function render() {
     const current = computers.find(c => c.id === selected);
     $('computer-name').textContent = current?.name || 'Choose a computer';
+    if (current) sendState(current);
     $('connection').textContent = switching ? 'Connecting…' : current && availabilityError ? 'Availability unknown' : current && !current.online ? 'Offline' : '';
     const options = computers.filter(c => c.online || c.id === selected);
     const focused = document.activeElement?.dataset?.computer;
@@ -126,15 +139,22 @@
     // Record selection without pushing cross-host task identifiers into the
     // other computer. Each iframe keeps its own navigation and unsent input.
     rememberSelection();
-    menu(false, true); render();
+    menu(false); render();
   }
   window.addEventListener('message', event => {
-    if (event.data?.type !== 'codex-computer-route' || typeof event.data.path !== 'string') return;
     const computer = computers.find(c => c.origin === event.origin && frames.get(c.id)?.contentWindow === event.source);
     if (!computer) return;
-    routes[computer.id] = safePath(event.data.path);
-    try {sessionStorage.setItem('codex-computer-routes', JSON.stringify(routes));} catch {}
-    if (computer.id === selected) rememberSelection();
+    if (event.data?.type === 'codex-computer-route' && typeof event.data.path === 'string') {
+      routes[computer.id] = safePath(event.data.path);
+      try {sessionStorage.setItem('codex-computer-routes', JSON.stringify(routes));} catch {}
+      if (computer.id === selected) rememberSelection();
+    } else if (event.data?.type === 'codex-computer-ready') {
+      readyFrames.add(frames.get(computer.id));
+      if (computer.id === selected) sendState(computer);
+    }
+    else if (computer.id === selected && event.data?.type === 'codex-computer-menu' && ['drawer','header'].includes(event.data.placement)) {
+      menu(true, true, {id:computer.id, window:event.source, origin:computer.origin, placement:event.data.placement}); refresh();
+    }
   });
   $('computer').onclick = () => {menu(!menuOpen, true); if (menuOpen) refresh();};
   $('refresh').onclick = () => refresh();

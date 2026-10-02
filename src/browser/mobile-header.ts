@@ -2,7 +2,7 @@ const headerSelector = 'header[data-app-shell-header-layout]';
 
 // Keep React's controls in place. The phone menu invokes their existing handlers,
 // so desktop controls, task permissions, and native dialogs keep their behavior.
-export function installMobileHeader(media: MediaQueryList, closeDrawer: () => void) {
+export function installMobileHeader(media: MediaQueryList, closeDrawer: () => void, computer?: {open: (placement: 'drawer' | 'header') => void; getName: () => string}) {
   const bar = document.createElement('div'); bar.id = 'ssh-mobile-header';
   const title = document.createElement('span'); title.id = 'ssh-mobile-title';
   const toggle = document.createElement('button'); toggle.type = 'button';
@@ -16,10 +16,11 @@ export function installMobileHeader(media: MediaQueryList, closeDrawer: () => vo
   panel.hidden = true;
   bar.append(title, toggle); document.body.append(bar, panel);
   let open = false;
+  let pointerInsidePanel = false;
   let activeEditor: HTMLInputElement | null | undefined;
   let nativeReturn: {source: HTMLElement; overlaySeen: boolean} | undefined;
   const close = (restoreFocus = false) => {
-    open = false; panel.hidden = true;
+    open = false; pointerInsidePanel = false; panel.hidden = true;
     toggle.setAttribute('aria-expanded', 'false');
     if (restoreFocus && media.matches) toggle.focus();
   };
@@ -29,6 +30,10 @@ export function installMobileHeader(media: MediaQueryList, closeDrawer: () => vo
     const editor = header?.querySelector<HTMLInputElement>('input[aria-label="Chat title"]');
     const isTask = !!editor || !!header?.querySelector('button[aria-label="Chat actions"]');
     const name = isTask ? toolbar?.querySelector<HTMLButtonElement>(':scope > div:first-child button') : undefined;
+    // Task titles live in the chat toolbar, which can sit outside the app
+    // header on newer Codex builds. Read its title node before falling back.
+    const chatToolbar = isTask ? document.querySelector<HTMLElement>('[aria-label="Chat toolbar"] [data-app-shell-header-toolbar]') : null;
+    const taskTitle = isTask ? (chatToolbar?.firstElementChild?.textContent?.trim() || toolbar?.firstElementChild?.textContent?.trim()) : undefined;
     const pageHeading = toolbar?.querySelector<HTMLElement>('h1, h2, [role="heading"]');
     const selectedPage = toolbar?.querySelector<HTMLElement>('[role="group"] button[aria-pressed="true"], [role="tablist"] [aria-selected="true"]');
     // Search fields and other forms must remain usable. Keep the original
@@ -42,7 +47,7 @@ export function installMobileHeader(media: MediaQueryList, closeDrawer: () => vo
       if (button instanceof HTMLButtonElement && button.disabled && (label === 'Back' || label === 'Forward')) return false;
       seen.add(label); return true;
     });
-    return {header, name, editor, isTask, supported, actions, title: editor?.value || name?.textContent?.trim() || pageHeading?.textContent?.trim() || selectedPage?.textContent?.trim() || 'Codex'};
+    return {header, name, editor, isTask, supported, actions, title: editor?.value || name?.textContent?.trim() || taskTitle || pageHeading?.textContent?.trim() || selectedPage?.textContent?.trim() || 'Codex'};
   }
   const labels: Record<string, string> = {
     'Chat actions': 'Task options…', 'Toggle summary': 'Task summary',
@@ -56,6 +61,12 @@ export function installMobileHeader(media: MediaQueryList, closeDrawer: () => vo
     const heading = document.createElement('div'); heading.className = 'ssh-mobile-actions-title';
     heading.textContent = title.textContent;
     panel.replaceChildren(heading);
+    if (computer) {
+      const switcher = document.createElement('button'); switcher.type = 'button';
+      switcher.textContent = `Switch computer · ${computer.getName()}`;
+      switcher.onclick = () => {close(); computer.open('header');};
+      panel.append(switcher);
+    }
     const add = (source: HTMLButtonElement | HTMLAnchorElement, label: string) => {
       const item = document.createElement('button'); item.type = 'button';
       item.textContent = label; item.disabled = source instanceof HTMLButtonElement && source.disabled;
@@ -87,10 +98,15 @@ export function installMobileHeader(media: MediaQueryList, closeDrawer: () => vo
     panel.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
   };
   document.addEventListener('pointerdown', event => {
-    if (open && event.target instanceof Node && !panel.contains(event.target) && !toggle.contains(event.target)) close();
+    pointerInsidePanel = open && event.target instanceof Node && panel.contains(event.target);
+    if (open && event.target instanceof Node && !pointerInsidePanel && !toggle.contains(event.target)) close();
   });
+  document.addEventListener('pointerup', () => {pointerInsidePanel = false;});
+  document.addEventListener('pointercancel', () => {pointerInsidePanel = false;});
   document.addEventListener('focusin', event => {
-    if (open && event.target instanceof Node && !panel.contains(event.target) && !toggle.contains(event.target)) close();
+    // WebKit can move focus outside a menu between pointerdown and click.
+    // Keep the item mounted until its tap finishes; keyboard focus still closes it.
+    if (open && !pointerInsidePanel && event.target instanceof Node && !panel.contains(event.target) && !toggle.contains(event.target)) close();
   });
   document.addEventListener('keydown', event => {
     if (!open) return;
@@ -117,6 +133,7 @@ export function installMobileHeader(media: MediaQueryList, closeDrawer: () => vo
       }
     }
     const {editor, isTask, supported, title: text} = controls();
+    const displayedTitle = !isTask && computer && text === 'Codex' ? computer.getName() : text;
     document.documentElement.classList.toggle('ssh-mobile-header-active', supported);
     const toggleLabel = isTask ? 'More task actions' : 'More page actions';
     if (toggle.getAttribute('aria-label') !== toggleLabel) toggle.setAttribute('aria-label', toggleLabel);
@@ -126,7 +143,7 @@ export function installMobileHeader(media: MediaQueryList, closeDrawer: () => vo
     document.documentElement.classList.toggle('ssh-mobile-title-editing', !!editor);
     if (editor && editor !== activeEditor) requestAnimationFrame(() => {if (media.matches && editor.isConnected) {editor.focus(); editor.select();}});
     activeEditor = editor;
-    if (title.textContent !== text) { title.textContent = text; title.title = text; close(); }
+    if (title.textContent !== displayedTitle) { title.textContent = displayedTitle; title.title = displayedTitle; close(); }
   };
   media.addEventListener('change', sync);
   return {sync, close};

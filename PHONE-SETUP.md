@@ -27,14 +27,16 @@ require access to that Mac.
 
 ## Use it
 
-- If multiple computers are configured, tap the computer name at the top and
-  choose an online Mac. Each Mac has its own tasks, projects, files, and account.
+- If multiple computers are configured, open **☰** and tap the computer name
+  at the top of the drawer, or use **••• → Switch computer**. Choose an online
+  Mac. Each Mac has its own tasks, projects, files, and account.
   Switching keeps both views open, including unsent drafts. A full app close or
   reload can still discard unsent input, so save important drafts first.
 - **☰** on the far left opens the project/task drawer. Swipe within the drawer
   to scroll, then tap a task to open it and close the drawer.
-- The phone header shows the page or task name. **•••** contains the available
-  task options and panel controls.
+- The phone header shows the computer name on the home page and the page or
+  task name elsewhere. **•••** contains computer switching, available task
+  options, and panel controls.
 - With local dictation configured, tap **Dictate**, allow microphone access,
   speak, and tap **Stop dictation**. Review the text before sending it.
   **Transcribe and send** is a separate action that submits the resulting text.
@@ -67,9 +69,10 @@ resubmit your work to another host.
 
 The selected computer and each computer's last page are remembered for the
 browser session. Computer views are separate frames with separate origins,
-cookies, task navigation, and draft state. The existing desktop SSH client
-keeps its original interface; the private browser viewer adds only the small
-computer bar above its existing desktop or mobile layout.
+cookies, task navigation, and draft state. The desktop browser keeps its small
+computer bar; on phones the switcher sits inside the task drawer and action
+menu, leaving one compact header. The existing desktop SSH client retains its
+original interface.
 
 ### Configure a second Mac
 

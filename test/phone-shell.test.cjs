@@ -10,10 +10,11 @@ async function fixture({path='/',saved={},touch=true}={}){
  const viewport={height:844,offsetTop:0,scale:1,addEventListener:(name,callback)=>{viewportEvents[name]=callback;}};
  const document={documentElement:root,hidden:false,activeElement:null,getElementById:id=>nodes[id],addEventListener(){},createElement:tag=>new Element(tag)};
  class Element {
-  constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.attrs={};this.hidden=false;if(tag==='iframe')this.contentWindow={};}
+  constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.attrs={};this.listeners={};this.hidden=false;if(tag==='iframe'){this.messages=[];this.contentWindow={postMessage:(data,origin)=>this.messages.push({data,origin})};}}
   append(...children){for(const child of children){child.parent=this;this.children.push(child);}}
   replaceChildren(...children){this.children=[];this.append(...children);}
   setAttribute(name,value){this.attrs[name]=value;}
+  addEventListener(name,callback){this.listeners[name]=callback;}
   focus(){document.activeElement=this;}
   querySelectorAll(){return this.children.flatMap(child=>[...(child.tag==='button'&&!child.disabled?[child]:[]),...child.querySelectorAll()]);}
   querySelector(){return this.querySelectorAll()[0];}
@@ -70,4 +71,19 @@ test('route messages require both the configured origin and that computer frame'
  assert.equal(f.location.href,before);
  f.events.message({origin:computers[0].origin,source:first.contentWindow,data:{type:'codex-computer-route',path:'//evil.example'}});
  assert.equal(f.location.searchParams.get('path'),'/');
+});
+test('computer menu messages require the selected configured frame',async()=>{
+ const f=await fixture(),first=f.frames()[0];
+ assert.equal(first.messages.length,0,'do not message an iframe before its viewer is ready');
+ f.events.message({origin:computers[0].origin,source:first.contentWindow,data:{type:'codex-computer-ready'}});
+ assert.ok(first.messages.some(message=>message.data.type==='codex-computer-state'&&message.data.name==='Studio'));
+ for(const [origin,source] of [['https://evil.example',first.contentWindow],[computers[1].origin,first.contentWindow],[computers[0].origin,{}]])
+  f.events.message({origin,source,data:{type:'codex-computer-menu',placement:'drawer'}});
+ assert.equal(f.nodes.computers.hidden,true);
+ f.events.message({origin:computers[0].origin,source:first.contentWindow,data:{type:'codex-computer-menu',placement:'drawer'}});
+ assert.equal(f.nodes.computers.hidden,false);assert.equal(f.nodes.computers.dataset.placement,'drawer');assert.equal(first.inert,true);
+ f.nodes.computer.onclick();
+ await f.select('laptop');
+ f.events.message({origin:computers[0].origin,source:first.contentWindow,data:{type:'codex-computer-menu',placement:'drawer'}});
+ assert.equal(f.nodes.computers.hidden,true);
 });

@@ -1,11 +1,12 @@
 import mobileStyles from './mobile.css?inline';
 import {installMobileHeader} from './mobile-header';
+import {installPhoneComputer} from './phone-computer';
 import {MOBILE_QUERY} from './mobile-viewport';
 
 // The desktop drawer reserves space for macOS window controls and installs
 // sortable touch sensors. Keep its contents, but give phones native scrolling
 // and a predictable overlay that does not shrink the conversation.
-export function installMobileLayout(closeOnNavigation: (close: () => void) => void) {
+export function installMobileLayout(closeOnNavigation: (close: () => void) => void, phoneParent: string | null = null) {
   const media = matchMedia(MOBILE_QUERY);
   const start = () => {
     const style = document.createElement('style'); style.textContent = mobileStyles; document.head.append(style);
@@ -29,7 +30,8 @@ export function installMobileLayout(closeOnNavigation: (close: () => void) => vo
         originalInert.delete(element);
       }
     }
-    const header = installMobileHeader(media, () => setOpen(false));
+    const computer = installPhoneComputer(media, phoneParent);
+    const header = installMobileHeader(media, () => setOpen(false), computer);
     function setOpen(value: boolean) {
       open = value && media.matches;
       if(open) header.close();
@@ -51,6 +53,7 @@ export function installMobileLayout(closeOnNavigation: (close: () => void) => vo
     });
     const sync = () => {
       header.sync();
+      computer?.sync();
       if (!media.matches) return;
       for (const element of originalInert.keys()) {if (!element.isConnected) originalInert.delete(element);}
       const aside = document.querySelector<HTMLElement>('.app-shell-left-panel');

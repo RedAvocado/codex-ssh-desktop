@@ -332,7 +332,7 @@ if (initialRoute.browserPath) {
 }
 
 electronShim.initialSidebarState = initialSidebarState;
-installMobileLayout(close => { electronShim.closeSidebar = close; });
+installMobileLayout(close => { electronShim.closeSidebar = close; }, phoneParent);
 const synchronizeNavigation = createBrowserNavigationSync(initialRoute.memoryPath);
 electronShim.onMemoryNavigationChanged = (navigation) => {
   // Every actual page change closes the overlay, including Back/Forward.

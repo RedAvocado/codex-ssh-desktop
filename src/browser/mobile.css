@@ -1,4 +1,5 @@
 #ssh-mobile-menu, #ssh-mobile-scrim, #ssh-mobile-header, #ssh-mobile-actions { display: none; }
+#ssh-computer-switch { display: none; }
 @media (max-width: 768px), (max-width: 1024px) and (max-height: 600px) and (hover: none) and (pointer: coarse) {
   html, body { width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; }
   [class*="_Layout_"] {
@@ -42,6 +43,21 @@
   .app-shell-left-panel, .app-shell-left-panel * { touch-action: pan-y !important; -webkit-user-drag: none !important; }
   .app-shell-left-panel [class*="overflow-y"] { overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; }
   .app-shell-left-panel { --height-token-row: 44px; }
+  /* The selected Chats glyph is a navigation target, not a second brand
+     header. Keep its tap area while making the rail quieter on phones. */
+  .app-shell-left-panel nav[aria-label="App navigation"] { padding-left: 4px !important; padding-right: 4px !important; }
+  .app-shell-left-panel nav[aria-label="App navigation"] button[aria-current="page"] { background: transparent !important; }
+  .app-shell-left-panel nav[aria-label="App navigation"] button[aria-current="page"] svg { width: 17px; height: 17px; }
+  .ssh-phone-computer-active .app-shell-left-panel button[aria-label^="Switch mode"] { display: none !important; }
+  .ssh-drawer-open.ssh-phone-computer-active #ssh-computer-switch {
+    display: flex; position: fixed; z-index: 1002; left: max(52px, env(safe-area-inset-left)); top: calc(48px + env(safe-area-inset-top));
+    align-items: center; width: calc(min(86vw, 320px) - 104px); min-height: 44px;
+    padding: 0 8px; border: 0; border-radius: 10px;
+    background: transparent; color: inherit; font: 600 17px system-ui;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; touch-action: manipulation;
+  }
+  .ssh-phone-computer-active #ssh-computer-switch:hover { background: color-mix(in srgb, var(--color-text, #fff) 8%, transparent); }
+  .ssh-phone-computer-active #ssh-computer-switch:focus-visible { outline: 2px solid var(--color-ring, #9cbcff); outline-offset: -2px; }
   .app-shell-left-panel button, .app-shell-left-panel a, .app-shell-left-panel .sidebar-item[role="button"] { min-height: 44px; }
   /* Touch has no hover: keep project and section menus visible and inside
      their row, instead of leaving zero-width wrappers over the drawer edge. */
