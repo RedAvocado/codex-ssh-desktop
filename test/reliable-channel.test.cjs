@@ -43,3 +43,13 @@ test('serialization failure ends the session instead of leaving a permanent sequ
  channel.send(circular);channel.send('later');
  assert.deepEqual(reasons,['message could not be serialized']);assert.deepEqual(out,[]);
 });
+test('valid large startup responses fit in the bounded replay queue',()=>{
+ const failures=[],sent=[];
+ const channel=new ReliableChannel(()=>{},reason=>failures.push(reason));
+ channel.attach(wire=>sent.push(wire.length),0);
+ channel.send('x'.repeat(18*1024*1024));
+ assert.deepEqual(failures,[]);
+ assert.equal(sent.length,1);
+ channel.receive({type:'bridge-ack',ack:1});
+ assert.equal(channel.snapshot().bytes,0);
+});

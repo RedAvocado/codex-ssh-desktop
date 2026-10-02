@@ -7,7 +7,7 @@ import {ReliableChannel} from '../shared/reliable-channel';
 export function resumableBridge<T>(server: WebSocketServer, create: (
   send: (message: T) => void,
   fail: (reason: string) => void,
-) => {receive: (message: T) => void; dispose: () => void}, ttl = 10 * 60_000) {
+) => {receive: (message: T) => void; dispose: () => void}, ttl = 60 * 60_000) {
   type Session = {channel: ReliableChannel<T>; socket?: WebSocket; timer?: NodeJS.Timeout; dispose: () => void};
   const sessions = new Map<string, Session>();
   const remove = (id: string) => {

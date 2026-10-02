@@ -11,7 +11,11 @@ export class ReliableChannel<T> {
   failed = false;
   snapshot() { return {sent:this.sent,written:this.written,received:this.received,pending:this.pending.size,bytes:this.bytes,failed:this.failed,nextQueued:this.pending.has(this.written+1)}; }
   constructor(private deliver: (payload: T) => void, private fail: (reason: string) => void,
-    private limit = 32 * 1024 * 1024) {}
+    // A single valid WebSocket message can be nearly 32 MiB on the wire. The
+    // replay queue counts UTF-16 string memory, and startup often emits several
+    // large messages before the browser can acknowledge them. Leave room for
+    // two maximum-size ASCII frames while keeping a hard per-view bound.
+    private limit = 128 * 1024 * 1024) {}
   attach(write: (wire: string) => void, ack: number): void {
     if (this.failed || !this.acknowledge(ack)) return;
     this.write = write;

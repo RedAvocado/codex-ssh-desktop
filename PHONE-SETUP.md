@@ -43,7 +43,9 @@ require access to that Mac.
 - Keep each recording under five minutes and 16 MB. If the remote Mac is busy
   transcribing another recording, try again after it finishes.
 - Brief network interruptions can resume the same page for up to ten minutes.
-  If **Reopen connection** appears, copy any unsent text before choosing it.
+  Brief phone network pauses reconnect automatically. An expired session also
+  reopens automatically when there is no unsent text. If **Reopen connection**
+  appears while you have a draft, copy the draft before choosing it.
 
 Mobile layout changes apply at phone widths and short touch-only landscape
 sizes. Ordinary desktop layouts retain their full header and sidebar. Both
@@ -211,8 +213,9 @@ separate steps. A successful GitHub push is not evidence of a running deployment
 
 The gateway is an optional, operator-configured adaptation. Complete the
 [remote Mac prerequisites and preparation](README.md#set-up-the-remote-mac)
-first. Node 24+, Tailscale with HTTPS certificates, and a supported prepared
-desktop version are required. Serve/Funnel and a public tunnel are unnecessary.
+first. Node 24 with native modules built for that Node version, Tailscale with
+HTTPS certificates, and a supported prepared desktop version are required.
+Serve/Funnel and a public tunnel are unnecessary.
 
 Create the following **private, untracked** files in `runtime/` on the remote
 Mac. Use directory mode `0700` and configuration/key mode `0600`.
@@ -239,7 +242,7 @@ backend's `runtime/viewer-token` internally, creates its own private
 `runtime/phone-session`, and never sends the backend token to the browser.
 
 Run the following entry points under the remote user's login session, using
-the same Node 24+ executable and repository working directory:
+the same matching Node executable and repository working directory:
 
 - `desktop/phone-gateway.cjs`: persistent HTTPS service, with a LaunchAgent
   configured to keep it alive.
@@ -269,8 +272,9 @@ rotation continues to apply. Keep tokens and both directories private.
 
 The adapter retains the original backend view across brief phone disconnects,
 deduplicates repeated phone messages, and replays missed responses. If the
-backend connection itself fails, it requests **Reopen connection**; it cannot
-restore an old backend view after that connection is lost.
+backend connection itself fails, the phone reopens automatically when no draft
+is present. Otherwise it offers **Reopen connection** so the draft can be
+copied first. It cannot restore an old backend view after that connection is lost.
 
 Keep maintenance pointed at the **original** runtime's control entry point.
 Do not run the default `desktop/phone-maintenance.cjs` from the sidecar, because

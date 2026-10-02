@@ -5,6 +5,10 @@ const crypto=require('node:crypto');
 const {spawn,execFileSync}=require('node:child_process');
 const {findCodexCli}=require('./engine-path.cjs');
 const root=path.resolve(__dirname,'..');
+// The private installation pins Node alongside its native dependencies.
+// A Homebrew Node update must not restart this runtime with a different ABI.
+const bundledNode=path.join(root,'runtime-node/node_modules/node/bin/node');
+const runtimeNode=fs.existsSync(bundledNode)?bundledNode:process.execPath;
 const state=path.join(root,'runtime');
 const tokenPath=path.join(state,'viewer-token');
 const pidFile=path.join(state,'server.pid');
@@ -46,7 +50,7 @@ async function run(){
     const globalState=path.join(os.homedir(),'.codex/.codex-global-state.json'),backup=path.join(state,'global-state-before-viewer.json');
     if(fs.existsSync(globalState)&&!fs.existsSync(backup)){fs.copyFileSync(globalState,backup,fs.constants.COPYFILE_EXCL);fs.chmodSync(backup,0o600)}
     const log=fs.openSync(path.join(state,'server.log'),'a',0o600);
-    const child=spawn(process.execPath,[path.join(root,'src/server/main.js'),'--host','127.0.0.1','--port','18314'],{
+    const child=spawn(runtimeNode,[path.join(root,'src/server/main.js'),'--host','127.0.0.1','--port','18314'],{
       cwd:root,detached:true,stdio:['ignore',log,log],env:{...process.env,
         CODEX_HOME:path.join(os.homedir(),'.codex'),CODEX_CLI_PATH:cli,
         CODEX_ELECTRON_USER_DATA_PATH:profile,CODEX_ELECTRON_RESOURCES_PATH:resources,
