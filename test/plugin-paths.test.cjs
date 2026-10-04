@@ -16,6 +16,10 @@ test('Browser sessions follow the installed plugin after the desktop UI becomes 
   const expected = path.join(cache,'26.903.61454/scripts/browser-service.mjs');
   const installed = path.join(cache,'26.915.31945/scripts/browser-service.mjs');
   assert.throws(() => resolveBrowserServicePath(expected, resources), /missing its service/);
+  const bundled = path.join(resources,'plugins/openai-bundled/plugins/browser/scripts/browser-service.mjs');
+  fs.mkdirSync(path.dirname(bundled),{recursive:true});
+  fs.writeFileSync(bundled,'export {};');
+  assert.equal(resolveBrowserServicePath(expected,resources),bundled,'uncached bundled plugins remain available after updates');
   fs.mkdirSync(path.dirname(installed),{recursive:true});
   fs.writeFileSync(installed,'export {};');
   assert.equal(resolveBrowserServicePath(expected,resources),installed);

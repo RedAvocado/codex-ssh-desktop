@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
+const {resolveCli} = require('./runtime-resources.cjs');
 
 // Recent desktop releases moved Resources/codex into codex-cli/CodexCLI.app.
 // A separately installed CLI is a fallback. Do not modify the signed app.
@@ -13,7 +14,9 @@ function findCodexCli(resources, {exists = fs.existsSync, executable = path => {
     '/opt/homebrew/bin/codex',
     '/usr/local/bin/codex',
   ];
-  for (const candidate of candidates) {
+  // Prefer the packaged entrypoint, which can configure its companion resources.
+  try { candidates.unshift(resolveCli(resources)); } catch {}
+  for (const candidate of new Set(candidates)) {
     if (!exists(candidate) || !executable(candidate)) continue;
     try {
       const version = String(run(candidate, ['--version'], {encoding:'utf8', timeout:5000, stdio:['ignore','pipe','ignore']})).trim();

@@ -15,11 +15,13 @@ This is an independent project from DittoDub, not an official OpenAI app.
 - A separate app, profile, and connection settings.
 - SSH transport with automatic reconnection.
 - Your existing remote Codex login, task history, and projects.
-- External links opened in Chrome on the remote Mac. The broad remote-file
-  preview endpoint is disabled to prevent arbitrary filesystem access.
+- Links open in a browser window inside Codex SSH Desktop. **Browser → Open
+  website…** (⌘L) opens any HTTP or HTTPS address. Remote localhost websites
+  tunnel automatically, including redirects and WebSocket live updates.
+  The broad remote-file preview endpoint remains disabled.
 - **Codex SSH Desktop → Check for Updates…** checks GitHub releases, downloads
   a newer client inside the app, and offers **Install and Restart**.
-- **Accounts → Manage Accounts…** reads local and remote Codex Vitals profiles,
+- **Accounts → Manage Accounts…** reads local and remote Headroom profiles,
   copies a local login over SSH, and switches the remote Codex account after
   confirming that all remote Codex tasks will stop.
 
@@ -119,24 +121,38 @@ They are not part of the repository or the downloadable app. The connection
 log is `viewer.log` in the same directory.
 
 The client uses local ports **18214/18215**, forwarding to **18314/18315** on
-the remote loopback interface. Only one viewer can use these local ports at a
-time. The auxiliary host binds to loopback and requires a private session token.
+the remote loopback interface, and **18216** for the browser's SSH SOCKS tunnel.
+Only one viewer can use these local ports at a time. The auxiliary host binds
+to loopback and requires a private session token.
 
-## Accounts and Codex Vitals
+Browser websites use the remote Mac's network. `localhost`, `127.0.0.1`, and
+`[::1]` refer to the remote Mac; original ports, paths, redirects, and WebSockets
+are preserved without opening a port per website. Websites have a separate,
+sandboxed session with no Codex viewer cookies or privileged preload. A lost
+SSH connection does not fall back to the laptop's network. Browser logins last
+for the app session. The viewer also remembers the last open chat per host.
+
+The runtime locates the CLI in both current and legacy app layouts. Reconnecting
+refreshes a missing Browser plugin cache from the installed app, and the service
+resolver can use the bundled plugin directly after an app update. These repairs
+do not restart running tasks or change accounts.
+
+## Accounts and Headroom
 
 Open **Accounts → Manage Accounts…** (⇧⌘A). Each account appears once, with an
 indicator showing whether it is available locally, remotely, or on both Macs.
-The list combines Vitals profiles, previously copied accounts, and the active
+Headroom was formerly named Codex Vitals; its existing storage path is preserved.
+The list combines Headroom profiles, previously copied accounts, and the active
 Codex login. Copy and Switch controls stay together on the account's row.
 Distinct workspace identities remain separate even if they share an email.
 Once loaded, remote accounts are also available directly in the Accounts menu.
 
 Each row shows **percent remaining** and **reset dates** for the quota windows
-Vitals reports, such as weekly or five-hour limits. The newest successful Vitals
+Headroom reports, such as weekly or five-hour limits. The newest successful Headroom
 snapshot available on either Mac is used for that account. The source and last
 update time appear below the reading, and reset dates use the local Mac's time
 zone. The page re-reads snapshots every minute while visible and when you click
-Refresh. Refresh inside Vitals to fetch a new reading from OpenAI. Missing or
+Refresh. Refresh inside Headroom to fetch a new reading from OpenAI. Missing or
 failed readings are shown as unavailable; a passed reset is marked as needing
 a refresh rather than assuming the account is full again.
 
@@ -147,18 +163,23 @@ a refresh rather than assuming the account is full again.
 - **Switch** always asks for confirmation. It backs up the active login, stops
   this user's remote Codex app, engines, task subprocesses, and auxiliary viewer
   runtime, installs the selected credentials, and relaunches the remote app.
-  The viewer then reconnects. **Stopped tasks must be resumed manually.**
+  The viewer then reconnects. Hung processes are force terminated before any
+  credentials change; managed CLI daemons are stopped as well. Background viewer
+  maintenance shares the same operation lock, preventing a restart mid-switch.
+  **Stopped tasks must be resumed manually.**
 
 If you copy a newer login for the already active remote account, **Apply login**
 uses the same confirmed restart flow to activate those new credentials.
 
 Python 3 must be available at `/usr/bin/python3` on both Macs. No new OpenAI
 login is needed locally. Existing remote viewer installations can use these
-controls without rebuilding their copied desktop runtime: the client installs
-a small Python helper over SSH when the account list is opened.
+controls without rebuilding their copied desktop renderer: the client installs
+a small Python helper over SSH when the account list is opened. The remote
+runtime controller must include `desktop/runtime-lock.py` and the matching
+account-operation lock support; older controllers are rejected before tasks stop.
 
-Vitals files are read from `~/Library/Application Support/CodexVitals/` without
-modifying Vitals or its accounts database. Copies, outgoing account snapshots,
+Headroom files are read from `~/Library/Application Support/CodexVitals/` without
+modifying Headroom or its accounts database. Copies, outgoing account snapshots,
 private backups, and operation status are stored remotely under
 `~/.local/share/codex-ssh-desktop/accounts/`. Credential files use mode `600` and
 private directories use mode `700`. Tokens travel through process stdin and
@@ -172,10 +193,10 @@ and provides status and recovery controls. Account switching interrupts work;
 automatic credential rollback cannot resume that work.
 
 Only complete desktop OAuth profiles are supported. Capture incomplete accounts
-again in Vitals. A copied credential file is not proof of a valid login: Codex
+again in Headroom. A copied credential file is not proof of a valid login: Codex
 checks the login when it uses the account. Sharing a refresh-token pair between
 Macs can require a fresh login if one copy is rotated or invalidated. Capture
-fresh credentials in Vitals and copy again if this happens. Do not run another
+fresh credentials in Headroom and copy again if this happens. Do not run another
 account switch or reopen a remote Codex client while a switch is in progress.
 
 ## How it works
@@ -221,10 +242,11 @@ An already-running browser tool session may need a fresh turn to pick up the
 updated configuration.
 
 Account switching has synthetic credential, process, rollback, SSH-hangup, and
-Electron UI tests. Live Vitals catalog discovery and process preflight have been
-checked on macOS. A real account was not activated during development because
-the remote Mac had ongoing work; successful file activation and app relaunch
-do not by themselves establish that OpenAI accepts a saved refresh token.
+Electron UI tests. The 0.5.0 release was also tested with a live account switch
+and return on macOS: prior Codex processes exited, the native app and viewer
+restarted, the selected account loaded, and authenticated usage requests succeeded.
+Headroom retained all saved profiles and continued reporting usage. This does not
+guarantee that an expired or subsequently revoked saved login will be accepted.
 
 ## Operations and development
 
