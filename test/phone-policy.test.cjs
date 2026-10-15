@@ -33,6 +33,8 @@ test('only packaged code, fonts and hashed images are cacheable, never task cont
  assert.equal(staticAsset('/assets/app-abc.js','text/javascript'),true);
  assert.equal(staticAsset('/assets/preload.js','application/javascript'),true);
  assert.equal(immutableStaticAsset('/assets/app-initial-b21bd554b363.js','text/javascript'),true);
+ assert.equal(immutableStaticAsset('/assets-v0123456789abcdef01234567/app-initial-b21bd554b363.js','text/javascript'),true);
+ assert.equal(immutableStaticAsset('/assets-v0123456789abcdef01234567/separate-three-sections@2x-648aba84ca91.webp','image/webp'),true);
  assert.equal(immutableStaticAsset('/assets/preload.js','application/javascript'),false);
  assert.equal(immutableStaticAsset('/assets/hoots-spritesheet-v8-21cacd193ace.webp','image/webp'),true);
  assert.equal(immutableStaticAsset('/assets/image-8f9bb7894769.png','image/png'),true);

@@ -18,9 +18,10 @@ function staticAsset(url, contentType) {
   try {decoded = decodeURIComponent(segment);} catch {return false;}
   if (decoded === '.' || decoded === '..') return false;
  }
- return (/^\/assets\/[A-Za-z0-9_./-]+\.(?:js|css|woff2?|ttf)(?:\?.*)?$/.test(source) &&
+ const assetSource=source.replace(/^\/assets-v[a-f0-9]{24}\//,'/assets/');
+ return (/^\/assets\/[A-Za-z0-9_./@-]+\.(?:js|css|woff2?|ttf)(?:\?.*)?$/.test(assetSource) &&
    /^(?:text\/css|(?:text|application)\/javascript|application\/x-javascript|font\/|application\/font)/.test(type)) ||
-  (/^\/assets\/[A-Za-z0-9_./-]+-[a-f0-9]{8,}\.(?:avif|gif|jpe?g|png|svg|webp)(?:\?.*)?$/.test(source) &&
+  (/^\/assets\/[A-Za-z0-9_./@-]+-[a-f0-9]{8,}\.(?:avif|gif|jpe?g|png|svg|webp)(?:\?.*)?$/.test(assetSource) &&
    /^image\/(?:avif|gif|jpeg|png|svg\+xml|webp)(?:;|$)/.test(type));
 }
 function immutableStaticAsset(url, contentType) {

@@ -247,6 +247,16 @@ configured origin's hostname through `tailscale cert`. It uses the existing
 backend's `runtime/viewer-token` internally, creates its own private
 `runtime/phone-session`, and never sends the backend token to the browser.
 
+The gateway also reads the prepared `app-initial-*.js` when it starts. It gives
+the complete renderer module graph a URL namespace derived from that file's
+SHA-256 hash. This matters because the prepared renderer is patched after its
+original packaged filename was assigned: a phone browser could otherwise keep
+using an older immutable copy under the same filename. Restart the gateway
+after replacing a prepared renderer. Its new HTML points to the new namespace,
+while relative imports continue to load from that same namespace. The gateway
+rejects stale namespaces instead of serving changed code at an old immutable
+URL.
+
 Run the following entry points under the remote user's login session, using
 the same matching Node executable and repository working directory:
 

@@ -1,6 +1,6 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http'),https=require('node:https'),{once}=require('node:events'),{spawn,execFileSync}=require('node:child_process'),{gunzipSync}=require('node:zlib');
-const {WebSocket,WebSocketServer}=require('ws'),{randomUUID}=require('node:crypto');
+const {WebSocket,WebSocketServer}=require('ws'),{randomUUID,createHash}=require('node:crypto');
 async function fixture(t,{legacy=false,computerMode=false}={}){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'private-phone-gateway-'));fs.mkdirSync(path.join(root,'desktop'));fs.mkdirSync(path.join(root,'runtime'));
  for(const name of ['phone-gateway.cjs','phone-policy.cjs','phone-legacy-bridge.cjs','phone-computers.cjs','phone-shell.html','phone-shell.js','phone-shell.css'])fs.copyFileSync(path.join(__dirname,'../desktop',name),path.join(root,'desktop',name));
@@ -12,15 +12,18 @@ async function fixture(t,{legacy=false,computerMode=false}={}){
  const origin='https://127.0.0.1:18443';fs.writeFileSync(path.join(root,'runtime/phone-config.json'),JSON.stringify({origin,allowedPeers:['127.0.0.1'],bindAddress:'127.0.0.1',legacyBackend:legacy,backendSessionCookie:legacy?'legacy_session':'remote_session'}));fs.writeFileSync(path.join(root,'runtime/viewer-token'),'a'.repeat(64));
  if(computerMode){const file=path.join(root,'runtime/phone-config.json'),config=JSON.parse(fs.readFileSync(file));config.computers=[{id:'studio',name:'Studio',origin}];config.frameAncestors=['https://laptop.example.ts.net:8443'];fs.writeFileSync(file,JSON.stringify(config));}
  fs.mkdirSync(path.join(root,'scratch/asar/webview/assets'),{recursive:true});fs.writeFileSync(path.join(root,'scratch/asar/webview/assets/preload.js'),'/* matching mobile preload */');
+ const renderer='/* prepared patched renderer */';
+ fs.writeFileSync(path.join(root,'scratch/asar/webview/assets/app-initial-b21bd554b363.js'),renderer);
+ const assetPrefix=`/assets-v${createHash('sha256').update(renderer).digest('hex').slice(0,24)}/`;
  const source='/* test code */\n'.repeat(10000);
  const backend=http.createServer((req,res)=>{
   assert.equal(req.headers.cookie,(legacy?'legacy_session=':'remote_session=')+'a'.repeat(64));
   if(req.url==='/broken-html'||req.url==='/broken-text'){
    res.writeHead(200,{'content-type':req.url.endsWith('html')?'text/html':'text/plain','content-length':1000});
    res.write('partial');setImmediate(()=>res.destroy());
-  }else if(req.url==='/assets/hoots-spritesheet-v8-21cacd193ace.webp'){
+  }else if(req.url==='/assets/hoots-spritesheet-v8-21cacd193ace.webp'||req.url==='/assets/separate-three-sections@2x-648aba84ca91.webp'){
    res.writeHead(200,{'content-type':'image/webp','content-length':2048});res.end(Buffer.alloc(2048,0x7f));
-  }else if(req.url==='/assets/test.js'||req.url==='/assets/app-initial-b21bd554b363.js'){
+  }else if(req.url==='/assets/test.js'||req.url==='/assets/app-initial-b21bd554b363.js'||req.url==='/assets/app-initial-b21bd554b363.js?fixture=1'){
    if(req.headers['if-none-match']==='"fixture"'){res.writeHead(304,{etag:'"fixture"'});res.end();return;}
    res.writeHead(200,{'content-type':'text/javascript',etag:'"fixture"','content-length':Buffer.byteLength(source)});res.end(source);
   }else if(req.url==='/__health'){res.setHeader('content-type','application/json');res.end('{"ready":true,"private":"must not escape health"}')}
@@ -29,7 +32,8 @@ async function fixture(t,{legacy=false,computerMode=false}={}){
    const body=JSON.stringify({private:'test',messages:'repeatable task state '.repeat(300)});
    res.writeHead(200,{'content-type':'application/json','content-length':Buffer.byteLength(body),'vary':'Origin'});res.end(body);
   }
-  else{res.setHeader('content-type','text/html');res.end('<html>ws://127.0.0.1:18214</html>')}
+  else if(req.url==='/other-html'){res.setHeader('content-type','text/html');res.end('<html><img src="/assets/private-image.png">ws://127.0.0.1:18214</html>')}
+  else{res.setHeader('content-type','text/html');res.end('<html><script type="module" src="/assets/preload.js"></script><script type="module" crossorigin src="./assets/index-7c1cf03aa02a.js"></script>ws://127.0.0.1:18214</html>')}
  });
  const upstreamSockets=new WebSocketServer({server:backend}),commands=[];let views=0;
  upstreamSockets.on('connection',(socket,request)=>{
@@ -49,12 +53,12 @@ async function fixture(t,{legacy=false,computerMode=false}={}){
  await Promise.race([once(child.stdout,'data'),once(child,'exit').then(()=>{throw Error('Gateway exited')})]);
  const ca=fs.readFileSync(path.join(root,'runtime/phone.crt'));
  const request=(url,headers={},method='GET')=>new Promise((resolve,reject)=>{
-  const req=https.request(origin+url,{ca,headers,method,timeout:2000},res=>{const chunks=[];res.on('error',reject);res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}))});req.on('error',reject);req.on('timeout',()=>req.destroy(Error('fixture request timed out')));req.end();
+  const req=https.request({protocol:'https:',hostname:'127.0.0.1',port:18443,path:url,ca,headers,method,timeout:2000},res=>{const chunks=[];res.on('error',reject);res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,body:Buffer.concat(chunks)}))});req.on('error',reject);req.on('timeout',()=>req.destroy(Error('fixture request timed out')));req.end();
  });
- return {request,root,source,origin,ca,commands,upstreamSockets,views:()=>views};
+ return {request,root,source,origin,ca,commands,upstreamSockets,assetPrefix,views:()=>views};
 }
 test('gateway enforces its boundary, compresses static code and keeps API responses uncached',async t=>{
- const {request,source,origin}=await fixture(t);
+ const {request,source,origin,assetPrefix}=await fixture(t);
  const asset=await request('/assets/test.js',{'accept-encoding':'gzip'});assert.equal(asset.status,200);assert.equal(asset.headers['content-encoding'],'gzip');assert.equal(gunzipSync(asset.body).toString(),source);assert.ok(asset.body.length<source.length/10);assert.match(asset.headers['cache-control'],/^private/);assert.equal(asset.headers['set-cookie'],undefined);
  const hashed=await request('/assets/app-initial-b21bd554b363.js');assert.equal(hashed.status,200);assert.equal(hashed.headers['cache-control'],'private, max-age=31536000, immutable');
  const image=await request('/assets/hoots-spritesheet-v8-21cacd193ace.webp',{'accept-encoding':'gzip'});
@@ -69,6 +73,18 @@ test('gateway enforces its boundary, compresses static code and keeps API respon
  assert.match(largeApi.headers.vary,/Origin, Accept-Encoding/);
  assert.equal(JSON.parse(gunzipSync(largeApi.body)).messages,'repeatable task state '.repeat(300));
  const page=await request('/');assert.match(page.headers['set-cookie'][0],/HttpOnly; SameSite=Strict/);assert.match(page.body.toString(),/wss:\/\/127.0.0.1:18443/);
+ assert.match(page.body.toString(),new RegExp(`src="\\.${assetPrefix.replaceAll('/','\\/')}index-`));
+ assert.match(page.body.toString(),new RegExp(`src="${assetPrefix.replaceAll('/','\\/')}preload\\.js"`));
+ assert.match((await request('/thread/example')).body.toString(),new RegExp(`src="\\.${assetPrefix.replaceAll('/','\\/')}index-`),'legacy direct deep links use the same module namespace');
+ assert.match((await request('/other-html')).body.toString(),/src="\/assets\/private-image\.png"/,'unrelated HTML is not rewritten');
+ const versioned=await request(`${assetPrefix}app-initial-b21bd554b363.js?fixture=1`);
+ assert.equal(versioned.status,200);assert.equal(versioned.body.toString(),source);assert.equal(versioned.headers['cache-control'],'private, max-age=31536000, immutable');
+ assert.equal((await request(`${assetPrefix}app-initial-b21bd554b363.js`,{},'HEAD')).status,200);
+ const versionedImage=await request(`${assetPrefix}separate-three-sections@2x-648aba84ca91.webp`);
+ assert.equal(versionedImage.status,200);assert.equal(versionedImage.headers['cache-control'],'private, max-age=31536000, immutable');
+ assert.equal((await request('/assets-v000000000000000000000000/app-initial-b21bd554b363.js')).status,404,'stale namespace must not serve changed bytes');
+ assert.equal((await request('/assets-v000000000000000000000000/app-initial-b21bd554b363.js',{accept:'text/html'})).status,404,'shell must not mask stale assets');
+ assert.equal((await request(`${assetPrefix}%2e%2e/app-initial-b21bd554b363.js`)).status,404,'encoded traversal must not reach backend');
  assert.equal((await request('/',{origin:'https://untrusted.example'})).status,403);
  assert.equal((await request('/__session')).status,403);
  assert.equal((await request('/api',{},'POST')).status,403);

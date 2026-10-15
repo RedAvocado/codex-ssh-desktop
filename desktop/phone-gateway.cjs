@@ -9,6 +9,20 @@ const root=path.resolve(__dirname,'..'),runtime=path.join(root,'runtime');
 const settings=JSON.parse(fs.readFileSync(path.join(runtime,'phone-config.json'),'utf8'));
 const {origin,allowed}=phoneConfiguration(settings);
 const {computers,frameAncestors}=computerConfiguration(settings);
+// The copied renderer is patched after its packaged filename is assigned.
+// Give the whole module graph a fresh URL when that file changes: its many
+// relative imports then stay in the same versioned module namespace.
+const preparedAssets=path.join(root,'scratch/asar/webview/assets');
+const rendererFiles=fs.readdirSync(preparedAssets).filter(file=>/^app-initial-[A-Za-z0-9]+\.js$/.test(file));
+if(rendererFiles.length!==1)throw Error('Expected one prepared phone renderer');
+const assetRevision=crypto.createHash('sha256').update(fs.readFileSync(path.join(preparedAssets,rendererFiles[0]))).digest('hex').slice(0,24);
+const assetPrefix=`/assets-v${assetRevision}/`;
+function originalAssetUrl(url){
+ if(!url.startsWith(assetPrefix))return null;
+ const suffix=url.slice(assetPrefix.length),pathname=suffix.split('?',1)[0];
+ if(!/^[A-Za-z0-9_./@-]+$/.test(pathname)||pathname.split('/').some(part=>!part||part==='.'||part==='..'))return null;
+ return `/assets/${suffix}`;
+}
 // Keep local speech processing in the already-authorized gateway, without a
 // second listener or restarting the task backend to update the phone feature.
 const transcriptionApp=require('fastify')({logger:false});
@@ -56,6 +70,8 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
  if(!valid(req)){console.warn('Phone request denied',JSON.stringify({peer:req.socket.remoteAddress,hostMatches:req.headers.host===origin.host,originMatches:!req.headers.origin||req.headers.origin===origin.origin,fetchSite:req.headers['sec-fetch-site'],tls:!!req.socket.encrypted}));res.writeHead(403,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('This viewer is restricted to your configured Tailscale devices.');return;}
  if(!req.url?.startsWith('/')||req.url.startsWith('//')||req.url.startsWith('/__session')){res.writeHead(403);res.end();return;}
  const pathname=req.url.split('?')[0];
+ const assetUrl=pathname.startsWith('/assets-v')?originalAssetUrl(req.url):null;
+ if(pathname.startsWith('/assets-v')&&(!assetUrl||!['GET','HEAD'].includes(req.method))){res.writeHead(404,{'Cache-Control':'no-store'});res.end();return;}
  if(['GET','HEAD'].includes(req.method)){
   if(pathname==='/__phone/health'){
    localReady().then(ready=>privateResponse(res,'application/json',JSON.stringify({ready}),req.method==='HEAD'));return;
@@ -67,7 +83,7 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
   if(shellFiles.has(pathname)){
    const [file,type]=shellFiles.get(pathname);privateResponse(res,type,fs.readFileSync(path.join(__dirname,file)),req.method==='HEAD');return;
   }
-  if(computers.length && !/^\/(?:__|assets\/|@fs\/)/.test(pathname) && (pathname==='/'||String(req.headers.accept).includes('text/html'))){
+  if(computers.length && !/^\/(?:__|assets\/|assets-v|@fs\/)/.test(pathname) && (pathname==='/'||String(req.headers.accept).includes('text/html'))){
    privateResponse(res,'text/html',fs.readFileSync(path.join(__dirname,'phone-shell.html')),req.method==='HEAD',{
     'Content-Security-Policy':`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src ${computers.map(c=>c.origin).join(' ')}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
     'X-Frame-Options':'DENY',
@@ -79,7 +95,7 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
  }
  let upstreamHeaders;
  try{upstreamHeaders=headers(req);}catch{unavailable(res);return;}
- if(legacyPreload&&req.url.split('?')[0]==='/assets/preload.js'&&['GET','HEAD'].includes(req.method)){
+ if(legacyPreload&&(assetUrl||req.url).split('?')[0]==='/assets/preload.js'&&['GET','HEAD'].includes(req.method)){
   const h={'Content-Type':'text/javascript','Cache-Control':'private, max-age=0, must-revalidate','Vary':'Accept-Encoding','ETag':legacyEtag,'X-Content-Type-Options':'nosniff'};
   if(req.headers['if-none-match']===legacyEtag){res.writeHead(304,h);res.end();return;}
   if(req.method==='HEAD'){res.writeHead(200,h);res.end();return;}
@@ -87,7 +103,7 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
   else{res.writeHead(200,h);res.end(legacyPreload)}
   return;
  }
- const upstream=http.request({host:'127.0.0.1',port:18314,path:pathname==='/__phone/viewer'?'/':req.url,method:req.method,headers:upstreamHeaders},reply=>{
+ const upstream=http.request({host:'127.0.0.1',port:18314,path:pathname==='/__phone/viewer'?'/':assetUrl||req.url,method:req.method,headers:upstreamHeaders},reply=>{
   reply.on('error',()=>unavailable(res));
   reply.once('aborted',()=>unavailable(res));
   const h={...reply.headers,'cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY'};
@@ -114,7 +130,9 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
    h['content-security-policy']=`frame-ancestors ${frameAncestors.join(' ')}`;
    const chunks=[];reply.on('data',chunk=>chunks.push(chunk));reply.on('end',()=>{
     if(res.destroyed||res.writableEnded)return;
-    const body=Buffer.from(Buffer.concat(chunks).toString().replace('ws://127.0.0.1:18214',`ws://127.0.0.1:18214 wss://${origin.host}`));
+    const source=Buffer.concat(chunks).toString();
+    const viewerDocument=/<script\s+type="module"\s+crossorigin\s+src="\.\/assets\/index-[A-Za-z0-9]+\.js"/.test(source);
+    const body=Buffer.from((viewerDocument?source.replaceAll('/assets/',assetPrefix):source).replace('ws://127.0.0.1:18214',`ws://127.0.0.1:18214 wss://${origin.host}`));
     h['set-cookie']=`__Host-phone_session=${csrf}; Secure; HttpOnly; SameSite=Strict; Path=/`;
     delete h['content-length'];delete h['content-encoding'];
     if(compress){h['content-encoding']='gzip';h.vary='Accept-Encoding';gzip(body,(error,data)=>{if(error){unavailable(res);return;}if(res.destroyed||res.writableEnded)return;res.writeHead(reply.statusCode,h);res.end(data);});}
