@@ -2,8 +2,12 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm');
 const computers=[{id:'studio',name:'Studio',origin:'https://studio.example.ts.net:8443',online:true},{id:'laptop',name:'Laptop',origin:'https://laptop.example.ts.net:8443',online:true}];
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-async function fixture({path='/',saved={},touch=true}={}){
+async function fixture({path='/',saved={},touch=true,holdFull=false,failFull=false,offlineInitial=[]}={}){
  let location=new URL(path,computers[0].origin),directory=computers.map(c=>({...c})),fails=false;
+ for(const id of offlineInitial)directory.find(c=>c.id===id).online=false;
+ let releaseFull;
+ const fullReady=holdFull?new Promise(resolve=>{releaseFull=resolve;}):null;
+ const requests=[];
  const events={},storage=new Map(Object.entries(saved)),nodes={};
  const classes=new Set(),styles=new Map(),viewportEvents={};
  const root={clientHeight:844,classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);}},style:{setProperty:(name,value)=>styles.set(name,value),removeProperty:name=>styles.delete(name)}};
@@ -22,11 +26,41 @@ async function fixture({path='/',saved={},touch=true}={}){
  }
  for(const id of ['computer','computer-name','connection','computers','computer-options','availability','refresh','viewers','empty','empty-title','empty-help','retry','message'])nodes[id]=new Element(id==='computer'||id==='refresh'?'button':'div');
  nodes.computers.append(nodes['computer-options'],nodes.refresh);nodes.viewers.append(nodes.empty);
- const context={document,URL,AbortSignal,Map,JSON,console,matchMedia:()=>({matches:touch,addEventListener(){}}),setTimeout:()=>1,clearTimeout(){},get location(){return location;},history:{replaceState(_s,_t,path){location=new URL(path,location);}},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},window:{visualViewport:viewport,addEventListener:(name,callback)=>{events[name]=callback;}},fetch:async()=>{if(fails)throw Error('offline');return {ok:true,json:async()=>({computers:directory.map(c=>({...c}))})};}};
+ const context={document,URL,AbortSignal,Map,JSON,console,matchMedia:()=>({matches:touch,addEventListener(){}}),setTimeout:()=>1,clearTimeout(){},get location(){return location;},history:{replaceState(_s,_t,path){location=new URL(path,location);}},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},window:{visualViewport:viewport,addEventListener:(name,callback)=>{events[name]=callback;}},fetch:async url=>{
+  const id=new URL(url,location).searchParams.get('id');requests.push(id);
+  if(!id&&fullReady)await fullReady;
+  if(fails||(!id&&failFull))throw Error('offline');
+  const selected=id==='@self'?directory.filter(c=>c.origin===location.origin):id?directory.filter(c=>c.id===id):directory;
+  return {ok:true,json:async()=>({computers:selected.map(c=>({...c}))})};
+ }};
  vm.runInNewContext(fs.readFileSync(require.resolve('../desktop/phone-shell.js'),'utf8'),context);
  await tick();await tick();
- return {nodes,events,storage,classes,styles,viewport,viewportEvents,get location(){return location;},frames:()=>nodes.viewers.children.filter(c=>c.tag==='iframe'),options:()=>nodes['computer-options'].children,setOnline(id,value){directory.find(c=>c.id===id).online=value;},fail(){fails=true;},async refresh(){await nodes.refresh.onclick();await tick();},async select(id){nodes['computer-options'].children.find(c=>c.dataset.computer===id).onclick();await tick();await tick();}};
+ if(!holdFull)for(let attempt=0;attempt<8&&nodes['computer-options'].children.length<directory.length;attempt++)await tick();
+ return {nodes,events,storage,classes,styles,viewport,viewportEvents,requests,releaseFull,get location(){return location;},frames:()=>nodes.viewers.children.filter(c=>c.tag==='iframe'),options:()=>nodes['computer-options'].children,setOnline(id,value){directory.find(c=>c.id===id).online=value;},fail(){fails=true;},async refresh(){await nodes.refresh.onclick();await tick();},async select(id){nodes['computer-options'].children.find(c=>c.dataset.computer===id).onclick();await tick();await tick();}};
 }
+test('selected computer starts loading before another computer finishes its health probe',async()=>{
+ const local=await fixture({holdFull:true});
+ assert.deepEqual(local.requests,['@self',null]);
+ assert.equal(local.frames().length,1);assert.equal(new URL(local.frames()[0].src).origin,computers[0].origin);
+ assert.equal(local.options().length,1);
+ local.releaseFull();await tick();await tick();assert.equal(local.options().length,2);
+ const remote=await fixture({saved:{'codex-computer':'laptop'},holdFull:true});
+ assert.deepEqual(remote.requests,['laptop',null]);
+ assert.equal(remote.frames().length,1);assert.equal(new URL(remote.frames()[0].src).origin,computers[1].origin);
+ remote.releaseFull();await tick();await tick();
+});
+test('a failed directory poll does not prevent a verified current host from loading',async()=>{
+ const f=await fixture({failFull:true});
+ assert.equal(f.frames().length,1);
+ assert.equal(f.nodes.connection.textContent,'Availability unknown');
+ assert.match(f.nodes.availability.textContent,/Cannot check availability/);
+});
+test('an offline saved computer falls back to another verified online host',async()=>{
+ const f=await fixture({saved:{'codex-computer':'laptop'},offlineInitial:['laptop']});
+ assert.equal(f.frames().length,1);
+ assert.equal(new URL(f.frames()[0].src).origin,computers[0].origin);
+ assert.equal(f.options().some(c=>c.dataset.computer==='laptop'),false);
+});
 test('phone keyboard resizes the visible shell and restores it on dismissal',async()=>{
  const f=await fixture(),frame=f.frames()[0];
  f.viewport.height=510;f.viewport.offsetTop=24;f.viewportEvents.resize();
@@ -41,7 +75,9 @@ test('browser chrome, pinch zoom and desktop sizing do not trigger phone keyboar
 });
 test('switching retains separate frame instances and never replaces a draft',async()=>{
  const f=await fixture(),first=f.frames()[0];first.draft='keep studio input';
+ const before=f.requests.length;
  await f.select('laptop');const second=f.frames()[1];second.draft='keep laptop input';
+ assert.deepEqual(f.requests.slice(before),['laptop'],'switching probes only the destination host');
  assert.equal(first.hidden,true);assert.equal(second.hidden,false);
  await f.select('studio');assert.equal(f.frames().length,2);assert.equal(f.frames()[0],first);assert.equal(first.draft,'keep studio input');assert.equal(second.draft,'keep laptop input');
  assert.equal(new URL(second.src).origin,computers[1].origin);

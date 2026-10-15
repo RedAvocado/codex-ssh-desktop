@@ -1,7 +1,7 @@
 // HTTPS binds only the Tailscale interface. Access uses the actual socket peer,
 // never client-supplied forwarding headers. TLS keys stay in the private runtime.
 const http=require('node:http'),https=require('node:https'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
-const {validPhoneRequest,staticAsset,phoneConfiguration,acceptsGzip}=require('./phone-policy.cjs');
+const {validPhoneRequest,staticAsset,immutableStaticAsset,phoneConfiguration,acceptsGzip}=require('./phone-policy.cjs');
 const {computerConfiguration,computerDirectory}=require('./phone-computers.cjs');
 const {createGzip,gzip}=require('node:zlib');
 const {pipeline}=require('node:stream');
@@ -61,7 +61,8 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
    localReady().then(ready=>privateResponse(res,'application/json',JSON.stringify({ready}),req.method==='HEAD'));return;
   }
   if(pathname==='/__phone/computers'){
-   directory().then(list=>privateResponse(res,'application/json',JSON.stringify({computers:list}),req.method==='HEAD'));return;
+   const id=new URL(req.url,origin.origin).searchParams.get('id')||undefined;
+   directory(id).then(list=>privateResponse(res,'application/json',JSON.stringify({computers:list}),req.method==='HEAD'));return;
   }
   if(shellFiles.has(pathname)){
    const [file,type]=shellFiles.get(pathname);privateResponse(res,type,fs.readFileSync(path.join(__dirname,file)),req.method==='HEAD');return;
@@ -93,7 +94,12 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
   delete h['set-cookie'];
   const compress=acceptsGzip(req.headers['accept-encoding']) && !req.headers.range && req.method!=='HEAD' && reply.statusCode===200;
   const asset=staticAsset(req.url,h['content-type']) || (reply.statusCode===304 && staticAsset(req.url,'text/javascript'));
-  if(asset){h['cache-control']='private, max-age=0, must-revalidate';h.vary='Accept-Encoding';}
+  if(asset){
+   // The large Codex renderer has content-hashed filenames. Reuse its code on
+   // the next Home Screen launch; keep unhashed preload.js revalidating.
+   h['cache-control']=immutableStaticAsset(req.url,h['content-type']||'text/javascript')?'private, max-age=31536000, immutable':'private, max-age=0, must-revalidate';
+   h.vary='Accept-Encoding';
+  }
 
   if(String(h['content-type']).includes('text/html')){
    // Only explicitly configured private gateways can embed a viewer. Keep

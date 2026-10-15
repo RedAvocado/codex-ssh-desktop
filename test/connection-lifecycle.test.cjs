@@ -1,9 +1,10 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
+let uuidCounter=0;
 
 function connection({recoveryStore,draft=()=>false,attachment=()=>false}={}){
  const sockets=[],window=new EventTarget(),document=new EventTarget(),timers=new Map();let timerId=0;
- let reloads=0;
+ let reloads=0,now=Date.now();document.hidden=false;
  document.querySelectorAll=selector=>{
   const hasAttachment=selector.includes('Remove attachment');
   if(!(hasAttachment?attachment():draft()))return [];
@@ -21,14 +22,57 @@ function connection({recoveryStore,draft=()=>false,attachment=()=>false}={}){
  const exports={};
  const source=ts.transpileModule(fs.readFileSync(require.resolve('../src/browser/connection.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  vm.runInNewContext(source,{exports,require:()=>require('../src/shared/reliable-channel.js'),window,document,WebSocket:Socket,console,
-  crypto:{randomUUID:()=> '11111111-1111-4111-8111-111111111111'},location:{protocol:'https:',host:'private.test',reload:()=>reloads++},
+  crypto:{randomUUID:()=> `11111111-1111-4111-8111-${String(++uuidCounter).padStart(12,'0')}`},location:{protocol:'https:',host:'private.test',reload:()=>reloads++},
   sessionStorage:recoveryStore?{getItem:key=>recoveryStore.get(key)??null,setItem:(key,value)=>recoveryStore.set(key,value)}:undefined,
-  HTMLInputElement:class{},HTMLTextAreaElement:class{},
+  HTMLInputElement:class{},HTMLTextAreaElement:class{},Date:{now:()=>now},
   setTimeout:callback=>{timers.set(++timerId,callback);return timerId},clearTimeout:id=>timers.delete(id)});
  const failures=[],send=exports.connectRenderer(()=>{},reason=>failures.push(reason)),socket=sockets[0];socket.open();
  const pagehide=persisted=>{const event=new Event('pagehide');Object.defineProperty(event,'persisted',{value:persisted});window.dispatchEvent(event)};
- return {socket,sockets,send,pagehide,timers,document,failures,get reloads(){return reloads}};
+ return {socket,sockets,send,pagehide,timers,document,failures,
+  advance:milliseconds=>{now+=milliseconds},get reloads(){return reloads}};
 }
+
+test('a reloaded phone tab retains its client key while each document gets a bridge session',()=>{
+ const store=new Map();const first=connection({recoveryStore:store});
+ const key=store.get('codex-phone-client-id');
+ assert.equal(first.socket.sent[0].clientId,key);
+ first.pagehide(false);
+ const second=connection({recoveryStore:store});
+ assert.equal(second.socket.sent[0].clientId,key);
+ assert.notEqual(second.socket.sent[0].sessionId,first.socket.sent[0].sessionId);
+ second.pagehide(false);
+});
+
+test('foregrounding a healthy idle socket probes it without disconnecting',()=>{
+ const f=connection();f.socket.receive({type:'bridge-welcome',ack:0});
+ f.advance(46_000);f.document.dispatchEvent(new Event('visibilitychange'));
+ assert.equal(f.socket.readyState,1);
+ assert.deepEqual(f.socket.sent.map(frame=>frame.type),['bridge-hello','bridge-unpark','bridge-probe']);
+ f.socket.receive({type:'bridge-probe-ack'});
+ assert.equal(f.socket.readyState,1);assert.equal(f.timers.size,0);
+ f.pagehide(false);
+});
+
+test('hiding and returning the phone parks then restores the same view',()=>{
+ const f=connection();f.socket.receive({type:'bridge-welcome',ack:0});
+ f.document.hidden=true;f.document.dispatchEvent(new Event('visibilitychange'));
+ assert.equal(f.socket.readyState,1);
+ assert.equal(f.socket.sent.at(-1).type,'bridge-park');
+ f.document.hidden=false;f.document.dispatchEvent(new Event('visibilitychange'));
+ assert.equal(f.socket.readyState,1);
+ assert.equal(f.socket.sent.at(-1).type,'bridge-unpark');
+ f.pagehide(false);
+});
+
+test('a foreground probe only reconnects when the socket does not answer',()=>{
+ const f=connection();f.socket.receive({type:'bridge-welcome',ack:0});
+ f.advance(46_000);f.document.dispatchEvent(new Event('visibilitychange'));
+ for(const [id,callback] of [...f.timers]){f.timers.delete(id);callback();}
+ assert.equal(f.socket.readyState,3);
+ assert.equal(f.failures.length,0);
+ assert.equal(f.timers.size,1);
+ f.pagehide(false);
+});
 
 test('a real page unload releases the bridge and cancels connection work',()=>{
  const {socket,send,pagehide,timers}=connection();
@@ -40,8 +84,8 @@ test('a real page unload releases the bridge and cancels connection work',()=>{
 test('BFCache pagehide retains the connection and sequence state',()=>{
  const {socket,send,pagehide}=connection();socket.receive({type:'bridge-welcome',ack:0});
  pagehide(true);send('after restoration');
- assert.equal(socket.readyState,1);assert.deepEqual(socket.sent.map(f=>f.type),['bridge-hello','bridge-data']);
- assert.equal(socket.sent[1].seq,1);
+ assert.equal(socket.readyState,1);assert.deepEqual(socket.sent.map(f=>f.type),['bridge-hello','bridge-park','bridge-data']);
+ assert.equal(socket.sent[2].seq,1);
  pagehide(false);
 });
 

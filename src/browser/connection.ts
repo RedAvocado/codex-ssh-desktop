@@ -2,9 +2,22 @@ import {ReliableChannel} from '../shared/reliable-channel';
 
 export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (reason: string) => void = () => {}) {
   const sessionId = crypto.randomUUID();
+  // A document gets a new bridge session, but reloads in the same phone tab
+  // should let the host retire its abandoned renderer if pagehide never ran.
+  const clientId = (() => {
+    try {
+      const key = 'codex-phone-client-id';
+      const previous = sessionStorage.getItem(key);
+      if (previous && /^[a-f0-9-]{36}$/.test(previous)) return previous;
+      const next = crypto.randomUUID();
+      sessionStorage.setItem(key, next);
+      return next;
+    } catch { return crypto.randomUUID(); }
+  })();
   let socket: WebSocket | undefined;
   let resume = false, ready = false, stopped = false, attempts = 0, lastMessageAt = Date.now();
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let probeTimeout: ReturnType<typeof setTimeout> | undefined;
   let notice: HTMLDivElement | undefined;
   const recoveryKey = 'codex-phone-automatic-reopens';
   function hasUnsentWork() {
@@ -44,7 +57,7 @@ export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (re
   }
   const channel = new ReliableChannel<T>(deliver, reason => {
     console.warn('[ssh-bridge] session reset:',reason);
-    stopped = true; ready = false; clearTimeout(retry); socket?.close();
+    stopped = true; ready = false; clearTimeout(retry); clearTimeout(probeTimeout); socket?.close();
     const reopening = automaticReopenAllowed();
     status(true, reopening); if(notice) notice.dataset.reason = reason;
     onFailure(reason);
@@ -59,29 +72,37 @@ export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (re
       document.addEventListener('visibilitychange', reopen);
     }
   });
+  function control(type: 'bridge-park' | 'bridge-unpark') {
+    if (!ready || socket?.readyState !== WebSocket.OPEN) return;
+    try { socket.send(JSON.stringify({type})); } catch { socket.close(); }
+  }
   function connect() {
     if (stopped || socket && socket.readyState < WebSocket.CLOSING) return;
     const current = socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/__backend/ipc`);
     lastMessageAt = Date.now();
     const deadline = setTimeout(() => {if (!ready && current === socket) current.close();}, 15_000);
-    current.addEventListener('open', () => current.send(JSON.stringify({type:'bridge-hello',sessionId,resume,ack:channel.received})));
+    current.addEventListener('open', () => current.send(JSON.stringify({type:'bridge-hello',sessionId,clientId,resume,ack:channel.received})));
     current.addEventListener('message', event => {
       if (current !== socket || stopped) return;
       lastMessageAt = Date.now();
+      clearTimeout(probeTimeout); probeTimeout = undefined;
       try {
         const frame = JSON.parse(String(event.data));
+        if (frame.type === 'bridge-probe-ack') return;
         if (frame.type === 'bridge-reset') { channel.abort(); return; }
         if (frame.type === 'bridge-welcome') {
           if (ready) { channel.abort(); return; }
           ready = true; resume = true; attempts = 0; clearTimeout(deadline);
           channel.attach(wire => {if (current.readyState === WebSocket.OPEN) current.send(wire);}, frame.ack);
+          if (document.hidden) control('bridge-park');
           if (!stopped) {notice?.remove(); notice = undefined;}
         } else if (ready) channel.receive(frame);
         else channel.abort();
       } catch(error) {console.error('[ssh-bridge] dispatch failed',error);channel.abort('dispatch failed'); }
     });
     current.addEventListener('close', () => {
-      clearTimeout(deadline); if (current !== socket) return;
+      clearTimeout(deadline); clearTimeout(probeTimeout); probeTimeout = undefined;
+      if (current !== socket) return;
       ready = false; channel.detach();
       if (stopped) return;
       status(); clearTimeout(retry);
@@ -90,17 +111,33 @@ export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (re
     current.addEventListener('error', () => current.close());
   }
   const wake = () => {
-    if (stopped) return;
-    if (ready && socket?.readyState === WebSocket.OPEN && Date.now() - lastMessageAt > 45_000) socket.close();
+    if (stopped || document.hidden) return;
+    control('bridge-unpark');
+    // iOS may freeze a WebSocket while the page is hidden. Check whether the
+    // *same* socket still responds before replacing its live renderer.
+    if (ready && socket?.readyState === WebSocket.OPEN && Date.now() - lastMessageAt > 45_000 && !probeTimeout) {
+      const current = socket;
+      try {
+        current.send(JSON.stringify({type:'bridge-probe'}));
+        probeTimeout = setTimeout(() => {
+          probeTimeout = undefined;
+          if (socket === current && ready && current.readyState === WebSocket.OPEN) current.close();
+        }, 10_000);
+      } catch { current.close(); }
+    }
     if (!ready) { clearTimeout(retry); connect(); }
   };
   window.addEventListener('online', wake);
-  document.addEventListener('visibilitychange', () => {if (!document.hidden) wake();});
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {clearTimeout(probeTimeout); probeTimeout = undefined; control('bridge-park');}
+    else wake();
+  });
+  window.addEventListener('pageshow', wake);
   window.addEventListener('pagehide', event => {
     // A real unload leaves no renderer to resume. BFCache and ordinary iOS
     // suspension keep their renderer and must retain the reconnecting session.
-    if (event.persisted) return;
-    stopped = true; ready = false; clearTimeout(retry); channel.detach();
+    if (event.persisted) {control('bridge-park'); return;}
+    stopped = true; ready = false; clearTimeout(retry); clearTimeout(probeTimeout); channel.detach();
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type:'bridge-release'}));
     socket?.close();
   });

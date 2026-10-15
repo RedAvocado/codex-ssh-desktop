@@ -89,3 +89,99 @@ test('explicit unload releases only the active view immediately and frees its se
  assert.equal(health().length,0);assert.equal(disposed,21);
  retained=await connect(retainedId,true);assert.equal(retained.frame.type,'bridge-reset');retained.s.terminate();
 });
+
+test('a fresh phone page retires only its disconnected predecessor and an idle probe preserves the view',async t=>{
+ let created=0,disposed=0;
+ const wss=new WebSocketServer({host:'127.0.0.1',port:0});await once(wss,'listening');
+ const health=resumableBridge(wss,()=>{created++;return {receive(){},dispose:()=>disposed++}});
+ t.after(()=>{for(const s of wss.clients)s.terminate();wss.close()});
+ const url=`ws://127.0.0.1:${wss.address().port}`,clientId=randomUUID();
+ async function connect(sessionId){
+  const s=new WebSocket(url);await once(s,'open');
+  const response=once(s,'message');
+  s.send(JSON.stringify({type:'bridge-hello',sessionId,clientId,resume:false,ack:0}));
+  const [raw]=await response;return {s,frame:JSON.parse(raw)};
+ }
+ const firstId=randomUUID(),first=await connect(firstId);
+ assert.equal(first.frame.type,'bridge-welcome');
+ const probe=once(first.s,'message');first.s.send(JSON.stringify({type:'bridge-probe'}));
+ assert.deepEqual(JSON.parse((await probe)[0]),{type:'bridge-probe-ack'});
+ assert.equal(health()[0].received,0,'a probe is not dispatched as a renderer message');
+ const active=await connect(randomUUID());
+ assert.equal(active.frame.type,'bridge-welcome');assert.equal(health().length,2,'an active view must not be retired');
+ first.s.terminate();await once(first.s,'close');
+ const fresh=await connect(randomUUID());
+ assert.equal(fresh.frame.type,'bridge-welcome');
+ assert.equal(created,3);assert.equal(disposed,1);assert.equal(health().length,2);
+ assert.equal(health().filter(session=>session.connected).length,2);
+ fresh.s.terminate();active.s.terminate();
+});
+
+test('a new authorized page evicts the oldest detached view at capacity but never an active view',async t=>{
+ let disposed=0;
+ const wss=new WebSocketServer({host:'127.0.0.1',port:0});await once(wss,'listening');
+ const health=resumableBridge(wss,()=>({receive(){},dispose:()=>disposed++}));
+ t.after(()=>{for(const s of wss.clients)s.terminate();wss.close()});
+ const url=`ws://127.0.0.1:${wss.address().port}`;
+ async function connect(sessionId,resume=false){
+  const s=new WebSocket(url);await once(s,'open');
+  const response=once(s,'message');s.send(JSON.stringify({type:'bridge-hello',sessionId,resume,ack:0}));
+  const [raw]=await response;return {s,frame:JSON.parse(raw)};
+ }
+ const views=[];
+ for(let i=0;i<16;i++){const id=randomUUID(),view=await connect(id);assert.equal(view.frame.type,'bridge-welcome');views.push({id,...view});}
+ assert.equal(health().length,16);
+ const full=await connect(randomUUID());assert.equal(full.frame.type,'bridge-reset');
+ await once(full.s,'close');assert.equal(health().length,16);assert.equal(disposed,0);
+ views[0].s.terminate();await once(views[0].s,'close');
+ await new Promise(resolve=>setTimeout(resolve,5));
+ views[1].s.terminate();await once(views[1].s,'close');
+ const fresh=await connect(randomUUID());assert.equal(fresh.frame.type,'bridge-welcome');
+ assert.equal(health().length,16);assert.equal(disposed,1);
+ const oldest=await connect(views[0].id,true);assert.equal(oldest.frame.type,'bridge-reset');await once(oldest.s,'close');
+ const newer=await connect(views[1].id,true);assert.equal(newer.frame.type,'bridge-welcome');
+ assert.equal(health().length,16);assert.equal(disposed,1);
+ fresh.s.terminate();newer.s.terminate();for(const view of views.slice(2))view.s.terminate();
+});
+
+test('a parked phone view expires even while its WebSocket remains open',async t=>{
+ let disposed=0;
+ const wss=new WebSocketServer({host:'127.0.0.1',port:0});await once(wss,'listening');
+ const health=resumableBridge(wss,()=>({receive(){},dispose:()=>disposed++}),50);
+ t.after(()=>{for(const s of wss.clients)s.terminate();wss.close()});
+ const s=new WebSocket(`ws://127.0.0.1:${wss.address().port}`);await once(s,'open');
+ const welcome=once(s,'message');s.send(JSON.stringify({type:'bridge-hello',sessionId:randomUUID(),resume:false,ack:0}));
+ assert.equal(JSON.parse((await welcome)[0]).type,'bridge-welcome');
+ const probe=once(s,'message');s.send(JSON.stringify({type:'bridge-park'}));s.send(JSON.stringify({type:'bridge-probe'}));
+ assert.deepEqual(JSON.parse((await probe)[0]),{type:'bridge-probe-ack'});
+ assert.equal(health()[0].connected,true);assert.equal(health()[0].parked,true);
+ const closed=once(s,'close');
+ const timeout=setTimeout(()=>s.terminate(),500);
+ try{await closed;}finally{clearTimeout(timeout)}
+ assert.equal(health().length,0);assert.equal(disposed,1);
+});
+
+test('unparking or resuming before expiry preserves the same phone view',async t=>{
+ let created=0,disposed=0;
+ const wss=new WebSocketServer({host:'127.0.0.1',port:0});await once(wss,'listening');
+ const health=resumableBridge(wss,()=>{created++;return {receive(){},dispose:()=>disposed++}},60);
+ t.after(()=>{for(const s of wss.clients)s.terminate();wss.close()});
+ const url=`ws://127.0.0.1:${wss.address().port}`,id=randomUUID();
+ async function connect(resume){
+  const s=new WebSocket(url);await once(s,'open');
+  const welcome=once(s,'message');s.send(JSON.stringify({type:'bridge-hello',sessionId:id,resume,ack:0}));
+  assert.equal(JSON.parse((await welcome)[0]).type,'bridge-welcome');return s;
+ }
+ let s=await connect(false);
+ s.send(JSON.stringify({type:'bridge-park'}));s.send(JSON.stringify({type:'bridge-unpark'}));
+ const probe=once(s,'message');s.send(JSON.stringify({type:'bridge-probe'}));await probe;
+ assert.equal(health()[0].parked,false);
+ await new Promise(resolve=>setTimeout(resolve,100));
+ assert.equal(s.readyState,WebSocket.OPEN);assert.equal(health().length,1);assert.equal(disposed,0);
+ s.send(JSON.stringify({type:'bridge-park'}));s.terminate();await once(s,'close');
+ s=await connect(true);
+ assert.equal(health()[0].parked,false);
+ await new Promise(resolve=>setTimeout(resolve,100));
+ assert.equal(s.readyState,WebSocket.OPEN);assert.equal(created,1);assert.equal(disposed,0);
+ s.terminate();
+});

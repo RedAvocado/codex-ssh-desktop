@@ -84,35 +84,47 @@
       }
     }
     const online = computers.filter(c => c.online).length;
-    $('availability').textContent = !checked ? 'Checking availability…' : online ? 'Only online computers are available to switch to.' : 'No computers are available. Check that a Mac is awake and Tailscale is connected.';
+    $('availability').textContent = availabilityError ? 'Cannot check availability. Reconnect Tailscale and try again.' : !checked ? 'Checking availability…' : online ? 'Only online computers are available to switch to.' : 'No computers are available. Check that a Mac is awake and Tailscale is connected.';
     $('empty').hidden = !!selected && frames.has(selected);
     if (!$('empty').hidden && checked) {
       $('empty-title').textContent = 'Choose an online computer';
       $('empty-help').textContent = online ? 'Open the computer menu above to connect.' : 'Keep a Mac awake, signed in, and connected to Tailscale.';
     }
   }
+  async function directory(id) {
+    const url = id ? `/__phone/computers?id=${encodeURIComponent(id)}` : '/__phone/computers';
+    const response = await fetch(url, {cache:'no-store', signal:AbortSignal.timeout(5000)});
+    if (!response.ok) throw Error('Unavailable');
+    const result = await response.json();
+    if (!Array.isArray(result.computers) || !result.computers.length) throw Error('Unavailable');
+    return result.computers;
+  }
   async function refresh() {
     if (pending) return pending;
     pending = (async () => {
       try {
-        const response = await fetch('/__phone/computers', {cache:'no-store', signal:AbortSignal.timeout(5000)});
-        if (!response.ok) throw Error('Unavailable');
-        const result = await response.json();
-        if (!Array.isArray(result.computers) || !result.computers.length) throw Error('Unavailable');
-        computers = result.computers; checked = true; availabilityError = false; render(); return true;
+        computers = await directory(); checked = true; availabilityError = false; render(); return true;
       } catch {
         computers = computers.map(c => ({...c, online:false})); checked = true; availabilityError = true; render();
-        $('availability').textContent = 'Cannot check availability. Reconnect Tailscale and try again.';
         return false;
       } finally {pending = undefined;}
     })();
     return pending;
   }
-  async function select(id) {
+  async function select(id, verified = false) {
     if (switching) return;
     if (id === selected) {menu(false, true); return;}
     switching = true; render();
-    const fresh = await refresh();
+    let fresh = verified;
+    if (!verified) {
+      try {
+        const result = (await directory(id))[0];
+        if (result) {
+          computers = computers.map(computer => computer.id === id ? result : computer);
+          fresh = true;
+        }
+      } catch { /* Keep the current view if this host cannot be verified. */ }
+    }
     const computer = computers.find(c => c.id === id);
     if (!fresh || !computer?.online) {
       switching = false; render(); say('That computer is offline. Your current view is still open.'); return;
@@ -178,10 +190,25 @@
   document.addEventListener('visibilitychange', wake);
   window.addEventListener('pagehide', () => clearTimeout(timer));
   window.addEventListener('pageshow', () => {syncViewport(); schedule();});
-  refresh().then(() => {
-    const wanted = requested || (firstPath !== '/' ? computers.find(c => c.origin === location.origin)?.id : preferred);
-    const initialComputer = computers.find(c => c.id === wanted && c.online) || computers.find(c => c.origin === location.origin && c.online) || computers.find(c => c.online);
-    if (initialComputer) select(initialComputer.id); else {render(); menu(true);}
+  (async () => {
+    // Start the saved/current computer as soon as its own health probe finishes.
+    // Poll the complete directory concurrently so a sleeping second Mac cannot
+    // hold up the viewer iframe, and switching still requires a fresh probe.
+    const wanted = requested || (firstPath !== '/' ? '@self' : preferred || '@self');
+    const selectedStatus = directory(wanted).catch(() => []);
+    const all = refresh();
+    const selectedComputer = (await selectedStatus).find(c => c.online &&
+      (wanted === '@self' ? c.origin === location.origin : c.id === wanted));
+    if (selectedComputer) {
+      if (!checked || availabilityError) {
+        computers = [selectedComputer]; render();
+      }
+      await select(selectedComputer.id, true);
+    } else {
+      await all;
+      const fallback = computers.find(c => c.origin === location.origin && c.online) || computers.find(c => c.online);
+      if (fallback) await select(fallback.id, true); else {render(); menu(true);}
+    }
     schedule();
-  });
+  })();
 })();

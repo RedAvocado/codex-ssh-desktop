@@ -42,10 +42,11 @@ require access to that Mac.
   **Transcribe and send** is a separate action that submits the resulting text.
 - Keep each recording under five minutes and 16 MB. If the remote Mac is busy
   transcribing another recording, try again after it finishes.
-- Brief network interruptions can resume the same page for up to ten minutes.
-  Brief phone network pauses reconnect automatically. An expired session also
-  reopens automatically when there is no unsent text. If **Reopen connection**
-  appears while you have a draft, copy the draft before choosing it.
+- Brief network interruptions and app switches can resume the same page for up
+  to two minutes. A longer background period releases the remote view so it
+  cannot keep a desktop chat marked as in use. The phone then reopens the view
+  automatically when there is no unsent text. If **Reopen connection** appears
+  while you have a draft, copy the draft before choosing it.
 
 Mobile layout changes apply at phone widths and short touch-only landscape
 sizes. Ordinary desktop layouts retain their full header and sidebar. Both

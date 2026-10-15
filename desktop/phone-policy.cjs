@@ -12,7 +12,10 @@ function staticAsset(url, contentType) {
  return /^\/assets\/[A-Za-z0-9_./-]+\.(?:js|css|woff2?|ttf)(?:\?.*)?$/.test(url || '') &&
   /^(?:text\/css|(?:text|application)\/javascript|application\/x-javascript|font\/|application\/font)/.test(String(contentType));
 }
-module.exports={validPhoneRequest,staticAsset,phoneConfiguration,acceptsGzip};
+function immutableStaticAsset(url, contentType) {
+ return staticAsset(url,contentType) && /-[a-f0-9]{8,}\.(?:js|css|woff2?|ttf)(?:\?.*)?$/.test(url || '');
+}
+module.exports={validPhoneRequest,staticAsset,immutableStaticAsset,phoneConfiguration,acceptsGzip};
 const {isIP}=require('node:net');
 function phoneConfiguration(settings) {
  const origin=new URL(settings?.origin);

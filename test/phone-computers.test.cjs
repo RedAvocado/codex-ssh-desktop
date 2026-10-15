@@ -20,6 +20,22 @@ test('availability tests each configured backend, deduplicates overlapping polls
  assert.deepEqual(await directory(),a);assert.equal(calls,2);
  assert.equal(JSON.stringify(a).includes('token'),false);
 });
+test('selected host status does not wait for another host and shares its probe with a full listing',async()=>{
+ let localCalls=0,remoteCalls=0,finishRemote;
+ const remoteReady=new Promise(resolve=>{finishRemote=resolve;});
+ const directory=computerDirectory(config.computers,origin,async()=>{localCalls++;return true;},async()=>{remoteCalls++;await remoteReady;return true;});
+ const full=directory();
+ const selected=await directory('@self');
+ assert.deepEqual(selected.map(c=>c.id),['studio']);
+ assert.equal(selected[0].online,true);
+ assert.equal(localCalls,1);assert.equal(remoteCalls,1);
+ assert.deepEqual(await directory('missing'),[]);
+ finishRemote();
+ assert.deepEqual((await full).map(c=>c.id),['studio','laptop']);
+ assert.equal(remoteCalls,1);
+ assert.equal((await directory('laptop'))[0].online,true);
+ assert.equal(remoteCalls,1);
+});
 test('unavailable TLS computer is offline within a bounded deadline',async()=>{
  const start=Date.now();assert.equal(await probeComputer('https://127.0.0.1:1',{timeout:50}),false);
  assert.ok(Date.now()-start<2000);

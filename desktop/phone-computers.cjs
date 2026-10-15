@@ -56,13 +56,26 @@ function probeComputer(origin, {timeout = 2500, ca, address} = {}) {
 }
 
 function computerDirectory(computers, ownOrigin, localReady, probe = probeComputer) {
-  let pending, cached, expires = 0;
-  return async () => {
-    if (cached && Date.now() < expires) return cached;
-    if (!pending) pending = Promise.all(computers.map(async computer => ({id:computer.id, name:computer.name, origin:computer.origin,
+  // Cache each configured host independently. A phone opening its saved host
+  // should not wait for an unrelated sleeping Mac's probe timeout. A later
+  // full listing shares any in-flight selected-host probe.
+  const entries = new Map();
+  async function status(computer) {
+    const previous = entries.get(computer.id);
+    if (previous?.value && Date.now() < previous.expires) return previous.value;
+    if (previous?.pending) return previous.pending;
+    const entry = previous || {expires: 0};
+    const pending = (async () => ({id:computer.id, name:computer.name, origin:computer.origin,
       online: await (computer.origin === ownOrigin ? localReady() : probe(computer.origin, {address:computer.probeAddress})).catch(() => false),
-    }))).then(result => {cached = result; expires = Date.now() + 2000; return result;}).finally(() => {pending = undefined;});
+    }))().then(value => {entry.value = value; entry.expires = Date.now() + 2000; return value;})
+      .finally(() => {entry.pending = undefined;});
+    entry.pending = pending; entries.set(computer.id, entry);
     return pending;
+  }
+  return async (id) => {
+    const selected = id === undefined ? computers : computers.filter(computer =>
+      id === '@self' ? computer.origin === ownOrigin : computer.id === id);
+    return Promise.all(selected.map(status));
   };
 }
 

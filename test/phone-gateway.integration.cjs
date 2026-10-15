@@ -18,7 +18,7 @@ async function fixture(t,{legacy=false,computerMode=false}={}){
   if(req.url==='/broken-html'||req.url==='/broken-text'){
    res.writeHead(200,{'content-type':req.url.endsWith('html')?'text/html':'text/plain','content-length':1000});
    res.write('partial');setImmediate(()=>res.destroy());
-  }else if(req.url==='/assets/test.js'){
+  }else if(req.url==='/assets/test.js'||req.url==='/assets/app-initial-b21bd554b363.js'){
    if(req.headers['if-none-match']==='"fixture"'){res.writeHead(304,{etag:'"fixture"'});res.end();return;}
    res.writeHead(200,{'content-type':'text/javascript',etag:'"fixture"','content-length':Buffer.byteLength(source)});res.end(source);
   }else if(req.url==='/__health'){res.setHeader('content-type','application/json');res.end('{"ready":true,"private":"must not escape health"}')}
@@ -50,6 +50,8 @@ async function fixture(t,{legacy=false,computerMode=false}={}){
 test('gateway enforces its boundary, compresses static code and keeps API responses uncached',async t=>{
  const {request,source,origin}=await fixture(t);
  const asset=await request('/assets/test.js',{'accept-encoding':'gzip'});assert.equal(asset.status,200);assert.equal(asset.headers['content-encoding'],'gzip');assert.equal(gunzipSync(asset.body).toString(),source);assert.ok(asset.body.length<source.length/10);assert.match(asset.headers['cache-control'],/^private/);assert.equal(asset.headers['set-cookie'],undefined);
+ const hashed=await request('/assets/app-initial-b21bd554b363.js');assert.equal(hashed.status,200);assert.equal(hashed.headers['cache-control'],'private, max-age=31536000, immutable');
+ assert.equal(asset.headers['cache-control'],'private, max-age=0, must-revalidate');
  const cached=await request('/assets/test.js',{'if-none-match':'"fixture"'});assert.equal(cached.status,304);assert.match(cached.headers['cache-control'],/^private/);
  const api=await request('/api');assert.equal(api.headers['cache-control'],'no-store');assert.equal(api.headers['content-encoding'],undefined);
  const page=await request('/');assert.match(page.headers['set-cookie'][0],/HttpOnly; SameSite=Strict/);assert.match(page.body.toString(),/wss:\/\/127.0.0.1:18443/);
@@ -121,6 +123,8 @@ test('computer shell stays available during backend failure and embeds only conf
  assert.equal(await probeComputer(origin,{address:'127.0.0.1',ca}),true);
  assert.equal(await probeComputer(origin.replace('127.0.0.1','wrong-host.invalid'),{address:'127.0.0.1',ca}),false,'a fixed probe address must not bypass TLS hostname validation');
  const list=await request('/__phone/computers');assert.deepEqual(JSON.parse(list.body).computers,[{id:'studio',name:'Studio',origin,online:true}]);
+ assert.deepEqual(JSON.parse((await request('/__phone/computers?id=%40self')).body).computers,JSON.parse(list.body).computers);
+ assert.deepEqual(JSON.parse((await request('/__phone/computers?id=missing')).body).computers,[]);
  assert.equal(list.headers['cache-control'],'no-store');
  const viewer=await request('/__phone/viewer?path=%2Fthread%2Ftask-a');
  assert.match(viewer.body.toString(),/wss:/);assert.match(viewer.headers['content-security-policy'],/https:\/\/laptop.example.ts.net:8443/);

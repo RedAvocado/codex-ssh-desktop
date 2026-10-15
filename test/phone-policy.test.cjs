@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const {validPhoneRequest,staticAsset,phoneConfiguration,acceptsGzip}=require('../desktop/phone-policy.cjs');
+const {validPhoneRequest,staticAsset,immutableStaticAsset,phoneConfiguration,acceptsGzip}=require('../desktop/phone-policy.cjs');
 test('missing or wildcard interface settings cannot expose a gateway listener',()=>{
  const config={origin:'https://mac.example.ts.net:8443',bindAddress:'100.64.0.10',allowedPeers:['100.64.0.20']};
  assert.equal(phoneConfiguration(config).allowed.has('100.64.0.20'),true);
@@ -32,5 +32,8 @@ test('WebSockets and mutations need matching origin and private cookie as well a
 test('only static code and fonts are cacheable, never task content or API data',()=>{
  assert.equal(staticAsset('/assets/app-abc.js','text/javascript'),true);
  assert.equal(staticAsset('/assets/preload.js','application/javascript'),true);
+ assert.equal(immutableStaticAsset('/assets/app-initial-b21bd554b363.js','text/javascript'),true);
+ assert.equal(immutableStaticAsset('/assets/preload.js','application/javascript'),false);
+ assert.equal(immutableStaticAsset('/thread/private','text/html'),false);
  for(const [url,type] of [['/thread/private','text/html'],['/__health','application/json'],['/assets/missing.js','text/html'],['/assets/account.json','application/json'],['/@fs/secret.js','text/javascript']])assert.equal(staticAsset(url,type),false);
 });
