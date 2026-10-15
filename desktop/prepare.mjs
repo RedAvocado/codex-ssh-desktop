@@ -6,6 +6,7 @@ import {patchLocalTranscription} from './transcription-patch.mjs';
 import {patchBrowserServicePath} from './plugin-path-patch.mjs';
 import {patchPrivateAnalytics} from './analytics-patch.mjs';
 import {patchPrivateRemoteControl} from './private-remote-control-patch.mjs';
+import {patchAuxiliaryAutomationScheduler,patchAuxiliaryAutomationRenderer} from './auxiliary-automations-patch.mjs';
 import {patchOwnership,patchOwnerFollowing,patchConflictRecovery} from './ownership-patch.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -43,6 +44,7 @@ main=replaceOne(main,currentBuild?/async whenReady\(\)\{let e;if\(this\.startupR
 main=replaceOne(main,/encodingLevel=`structuredClonable`/,'encodingLevel=`jsonCompatible`','host port encoding');
 main=patchBrowserServicePath(main);
 if(currentBuild)main=patchPrivateRemoteControl(main);
+if(currentBuild)main=patchAuxiliaryAutomationScheduler(main,{preparedVersion:installed.version,asset:mainFile[0]});
 fs.writeFileSync(mainPath,main);
 
 const htmlPath=path.join(out,'webview/index.html');
@@ -73,6 +75,7 @@ for(const file of fs.readdirSync(path.join(out,'webview/assets'))){
  text=patchOwnership(text);
  text=patchOwnerFollowing(text);
  text=patchConflictRecovery(text);
+ if(currentBuild)text=patchAuxiliaryAutomationRenderer(text,{preparedVersion:installed.version,asset:file});
  fs.writeFileSync(filePath,text);patchedRenderer++;
 }
 if(patchedRenderer!==1)throw Error(`Expected one renderer; found ${patchedRenderer}`);

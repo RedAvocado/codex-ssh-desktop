@@ -332,6 +332,25 @@ After restart, inspect new auxiliary logs for Remote control WebSocket attempts;
 older log entries remain from the previous runtime. Normal Codex AI requests
 and tools still use their configured providers.
 
+### Avoid duplicate scheduled work in the auxiliary viewer
+
+The copied desktop runtime also contains a local automation scheduler and a
+home-page component that eagerly opens active automation chats. On the private
+viewer, these can compete with the native Codex app for the same chat writer
+and delay the home page even when no chat is opened. For the reviewed
+`26.911.61220` prepared build, `desktop/prepare.mjs` applies
+`desktop/auxiliary-automations-patch.mjs`: it disables the scheduler start in
+the **auxiliary** main bundle and makes the renderer select no background
+automation chat targets. The automation UI and ordinary chat selection remain
+in place. The native Codex installation is not patched.
+
+**Scheduling tradeoff:** The private viewer no longer runs local scheduled
+automations itself. Keep the native Codex desktop app available for local
+automations; if it is closed and no other scheduler is running, scheduled work
+may wait until that scheduler is available again. After a compatible runtime
+update, re-prepare and verify both patched assets. The patch refuses unknown
+versions, filenames, or input hashes rather than modifying an unreviewed build.
+
 ## Privacy boundaries
 
 - The viewer travels between authorized devices and the remote Mac over
