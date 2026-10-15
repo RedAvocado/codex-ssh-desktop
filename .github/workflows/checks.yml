@@ -18,3 +18,16 @@ jobs:
       - name: Private HTTPS gateway
         run: node --test test/phone-gateway.integration.cjs
       - run: npm audit --audit-level=high
+  desktop-ui:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node node_modules/electron/install.js
+      - run: npm run test:accounts-ui
+      - run: npm run test:browser-ui
+      - run: npm run test:updates-ui

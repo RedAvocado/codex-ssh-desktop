@@ -13,7 +13,7 @@ const dialogs = [];
 const fixture = Array.from({length: 4}, (_, index) => ({
   id: String(index + 1).repeat(64), name: ['Personal', 'account2@example.test', 'Research', '<img src=x>'][index],
   email: `account${index + 1}@example.test`, accountId: `workspace-${index + 1}`,
-  active: index === 0, expiresAt: index === 3 ? 1 : 9999999999, sources: ['Codex Vitals'],
+  active: index === 0, expiresAt: index === 3 ? 1 : 9999999999, sources: ['Headroom'],
   usage: {status: 'available', observedAt: Date.now() / 1000 - 120,
     windows: [{limitSeconds: 604800, remainingPercent: [100, 8, 54, 0][index], resetsAt: Date.now() / 1000 + 3600}]},
 }));

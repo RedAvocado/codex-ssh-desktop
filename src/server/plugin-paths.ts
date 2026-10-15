@@ -14,6 +14,10 @@ export function resolveBrowserServicePath(expected: string, resources = process.
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { return expected; }
   if (manifest.name !== 'browser' || typeof manifest.version !== 'string' || !/^\d+(?:\.\d+){2,3}$/.test(manifest.version)) return expected;
   const current = path.join(pluginRoot, manifest.version, 'scripts', 'browser-service.mjs');
-  if (!fs.existsSync(current)) throw new Error('The installed Browser plugin is missing its service. Reopen Codex Plugins to refresh the installed plugin.');
-  return current;
+  if (fs.existsSync(current)) return current;
+  // Recent desktop builds can run bundled plugins directly without populating
+  // the old versioned cache. The matching manifest and service ship together.
+  const bundled = path.join(path.dirname(path.dirname(manifestPath)), 'scripts', 'browser-service.mjs');
+  if (fs.existsSync(bundled)) return bundled;
+  throw new Error('The installed Browser plugin is missing its service. Reopen Codex Plugins to refresh the installed plugin.');
 }

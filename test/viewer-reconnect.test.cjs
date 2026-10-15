@@ -6,11 +6,13 @@ function fixture(){
  const dependencies={electron:{app,ipcMain:{on(){},handle(){}}},
   'node:child_process':{
    execFile(_file,_args,_options,callback){queueMicrotask(()=>callback(fail?Error('fixture SSH failure'):null,JSON.stringify({ready:true,token:'a'.repeat(64),port:18314,version:'test',pid:42}),''))},
-   spawn(){connected=true;child=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>{connected=false};return child},
+   spawn(){connected=true;child=new EventEmitter();child.stderr=new EventEmitter();child.kill=()=>{connected=false;queueMicrotask(()=>child.emit('exit'));};return child},
   },'node:path':path,'node:os':{homedir:()=>'/fixture'},'node:fs':{mkdirSync(){},appendFileSync(){}},
   'node:net':{connect(){const socket=new EventEmitter();socket.destroy=()=>{};queueMicrotask(()=>socket.emit(connected?'connect':'error'));return socket}},
   './config.cjs':{readConfig:()=>({sshHost:'fixture',sessionCookie:'remote_session'}),remoteCommand:()=> 'fixture'},
   './updates.cjs':{},'./update-window.cjs':{},'./update-helper.cjs':{},'./update-install.cjs':{},'./account-window.cjs':{},'./package.json':{version:'test'},
+  './browser-window.cjs':{},'./browser-policy.cjs':require('../viewer/browser-policy.cjs'),
+  './view-state.cjs':{restorePage:()=> '/',rememberPage(){}},
  };
  const module={exports:{}};
  const source=fs.readFileSync(require.resolve('../viewer/main.cjs'),'utf8')+'\nmodule.exports={connect,initialize(w,s){window=w;viewerSession=s}};';
@@ -29,4 +31,7 @@ test('SSH reconnect keeps the existing task document and its unsent draft',async
 test('an unsuccessful background reconnect keeps the task visible and schedules another attempt',async()=>{
  const f=fixture();await f.connect();f.navigate();const count=f.loads.length;f.disconnect();f.fail();
  await f.connect();assert.equal(f.loads.length,count);assert.ok(f.timers.length>=2);
+});
+test('initial connection failure also schedules recovery',async()=>{
+ const f=fixture();f.fail();await f.connect();assert.ok(f.timers.length);assert.match(decodeURIComponent(f.url),/Retrying automatically/);
 });

@@ -4,6 +4,7 @@ const {checkForUpdates, releasesUrl} = require('./updates.cjs');
 const {installedBundle, prepareUpdate, discardUpdate, startInstaller} = require('./update-install.cjs');
 
 function createUpdateControls({version, userData, readPrivateRelease, blocksInstall = () => false,
+  openWebsite = url => shell.openExternal(url),
   check = checkForUpdates, prepare = prepareUpdate, install = startInstaller, discard = discardUpdate,
   getTarget = installedBundle, quit = () => app.quit()}) {
   let window, release, prepared, abort, busy = false, installing = false;
@@ -44,7 +45,7 @@ function createUpdateControls({version, userData, readPrivateRelease, blocksInst
   }
   async function action(kind) {
     if (kind === 'cancel') { if (!installing) { abort?.abort(); window?.close(); } return; }
-    if (kind === 'releases') { await shell.openExternal(release?.url || releasesUrl); return; }
+    if (kind === 'releases') { await openWebsite(release?.url || releasesUrl); return; }
     if (busy || installing) return;
     if (kind === 'check') return refresh();
     if (kind !== 'download' && kind !== 'install') throw Error('Unknown update action.');

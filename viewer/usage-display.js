@@ -11,11 +11,11 @@ function usageDisplay(usage, now = Date.now(), locale = undefined, timeZone = un
   const ageMinutes = snapshotTime ? Math.max(0, Math.floor((now - snapshotTime) / 60000)) : null;
   const age = ageMinutes === null ? '' : ageMinutes < 1 ? 'just now' : ageMinutes < 60
     ? `${ageMinutes}m ago` : ageMinutes < 1440 ? `${Math.floor(ageMinutes / 60)}h ago` : `${Math.floor(ageMinutes / 1440)}d ago`;
-  const source = usage?.source === 'remote' ? 'Remote Vitals' : 'Local Vitals';
-  const provenance = snapshotTime ? `${source} · updated ${age}` : 'No Vitals usage snapshot';
+  const source = usage?.source === 'remote' ? 'Remote Headroom' : 'Local Headroom';
+  const provenance = snapshotTime ? `${source} · updated ${age}` : 'No Headroom usage snapshot';
   if (usage?.status !== 'available' || !usage.windows?.length) return {
     windows: [], provenance, stale: true,
-    message: usage?.status === 'error' ? 'Vitals could not refresh usage. Refresh the account in Vitals.' : 'Usage unavailable. Refresh the account in Vitals.',
+    message: usage?.status === 'error' ? 'Headroom could not refresh usage. Refresh the account in Headroom.' : 'Usage unavailable. Refresh the account in Headroom.',
   };
   const date = new Intl.DateTimeFormat(locale, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short', ...(timeZone ? {timeZone} : {})});
   const percent = new Intl.NumberFormat(locale, {maximumFractionDigits: 1});
@@ -25,7 +25,7 @@ function usageDisplay(usage, now = Date.now(), locale = undefined, timeZone = un
       return {label: quotaLabel(window.limitSeconds), percent: window.remainingPercent,
         remaining: `${percent.format(window.remainingPercent)}% ${passed ? 'at last check' : 'left'}`,
         reset: !window.resetsAt ? 'Reset time unavailable' : passed
-          ? 'Reset time passed · refresh Vitals' : `Resets ${date.format(window.resetsAt * 1000)}`,
+          ? 'Reset time passed · refresh Headroom' : `Resets ${date.format(window.resetsAt * 1000)}`,
         resetPassed: passed};
     })};
 }

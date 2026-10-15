@@ -87,7 +87,7 @@ def claims(token):
         require(isinstance(value, dict), 'Invalid token metadata.')
         return value
     except (ValueError, IndexError, UnicodeError):
-        raise AccountError('Could not read OAuth identity metadata. Capture the account in Codex Vitals again.')
+        raise AccountError('Could not read OAuth identity metadata. Capture the account in Headroom again.')
 
 
 def identity(auth):
@@ -219,7 +219,7 @@ class Store:
             pass
         if not isinstance(profiles, dict):
             profiles = {}
-        files = [(p, 'Codex Vitals') for p in sorted((self.vitals / 'profiles').glob('*/auth.json'))]
+        files = [(p, 'Headroom') for p in sorted((self.vitals / 'profiles').glob('*/auth.json'))]
         files += [(p, 'Copied / saved') for p in sorted((self.root / 'vault').glob('*/auth.json'))]
         if self.live.exists():
             files.append((self.live, 'Active Codex'))
@@ -239,7 +239,7 @@ class Store:
                 alias = entry.get('alias') or meta.get('alias') or item['email']
                 # Vitals may refresh accounts.json before its desktop snapshot.
                 # Reuse the captured id token only for the exact same identity.
-                if (source == 'Codex Vitals' and entry.get('access') and entry.get('refresh')
+                if (source == 'Headroom' and entry.get('access') and entry.get('refresh')
                         and str(entry.get('email', '')).lower() == item['email']
                         and entry.get('accountId') == item['accountId']):
                     newer = json.loads(json.dumps(auth))
@@ -341,6 +341,25 @@ def run_command(args, timeout=20):
         raise AccountError('A remote process command failed or timed out.')
 
 
+def resolve_cli(resources):
+    resources = Path(resources)
+    root = resources / 'codex-cli'
+    candidates = []
+    try:
+        entry = read_json(root / 'codex-package.json').get('entrypoint')
+        if isinstance(entry, str):
+            target = (root / entry).resolve()
+            if root.resolve() in target.parents:
+                candidates.append(target)
+    except (OSError, ValueError, AccountError):
+        pass
+    candidates.extend([root / 'bin/codex', resources / 'codex'])
+    for file in candidates:
+        if file.is_file() and os.access(file, os.X_OK):
+            return file
+    raise AccountError('The installed Codex command-line engine could not be found.')
+
+
 class MacProcesses:
     def __init__(self, store, config):
         self.store = store
@@ -364,12 +383,16 @@ class MacProcesses:
             info = plistlib.load(stream)
         require(info.get('CFBundleIdentifier') == 'com.openai.codex', 'The configured application is not Codex.')
         self.executable = self.app / 'Contents/MacOS' / info['CFBundleExecutable']
-        self.engine = self.app / 'Contents/Resources/codex'
-        require(self.engine.is_file() and self.executable.is_file(), 'The Codex executables are missing.')
+        self.engine = resolve_cli(self.app / 'Contents/Resources')
+        require(self.executable.is_file(), 'The Codex application executable is missing.')
+        require((self.control.parent / 'runtime-lock.py').is_file()
+                and '--account-operation-lock-held' in self.control.read_text(),
+                'Update the remote viewer runtime before switching accounts. Its maintenance process does not yet support the account-operation lock.')
         require(os.access(str(store.live.parent), os.W_OK), 'The remote credential directory is not writable.')
         require(not store.live.is_symlink(), 'The active credential file is a symbolic link.')
         self.runtime_pid = self.runtime()
         self.runtime_was_running = self.runtime_pid is not None
+        self.stopping = {}
 
     def snapshot(self):
         result = run_command(['/bin/ps', '-axo', 'pid=,ppid=,uid=,lstart=,comm='])
@@ -414,6 +437,17 @@ class MacProcesses:
             roots |= children
         return {pid: rows[pid] for pid in roots}
 
+    def remaining(self):
+        rows = self.snapshot()
+        # Descendants can be reparented when the app exits. Keep their original
+        # process identities until they exit, without signalling a reused PID.
+        targets = self.consumers(rows)
+        for pid, item in getattr(self, 'stopping', {}).items():
+            if pid in rows and all(rows[pid][key] == item[key] for key in ('start', 'exe')):
+                targets[pid] = rows[pid]
+        self.stopping = targets
+        return targets
+
     def signal_same(self, targets, sig):
         current = self.snapshot()
         for pid, item in targets.items():
@@ -425,21 +459,29 @@ class MacProcesses:
                     pass
 
     def stop(self):
-        initial = self.consumers(self.snapshot())
+        initial = self.remaining()
         # Shut down controllers first so they cannot respawn an engine mid-swap.
         controllers = {pid: row for pid, row in initial.items()
                        if pid == self.runtime_pid or row['exe'] == str(self.executable)}
         self.signal_same(controllers, signal.SIGTERM)
-        time.sleep(2)
+        # A managed CLI daemon may otherwise be immediately restarted by
+        # launchd. Older CLI releases can reject this command; PID verification
+        # below remains authoritative and prevents a credential swap if needed.
+        try:
+            run_command([str(self.engine), 'app-server', 'daemon', 'stop'])
+        except AccountError:
+            pass
         self.signal_same(initial, signal.SIGTERM)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            remaining = self.consumers(self.snapshot())
+            remaining = self.remaining()
             if not remaining:
                 break
             time.sleep(.25)
         for _ in range(3):
-            remaining = {**initial, **self.consumers(self.snapshot())}
+            remaining = self.remaining()
+            if not remaining:
+                break
             self.signal_same(remaining, signal.SIGKILL)
             time.sleep(.5)
         self.assert_stopped()
@@ -449,7 +491,7 @@ class MacProcesses:
             pid_file.unlink()
 
     def assert_stopped(self):
-        require(not self.consumers(self.snapshot()),
+        require(not self.remaining(),
                 'A remote Codex process is still running or restarted. Credentials were not changed.')
 
     def launch(self):

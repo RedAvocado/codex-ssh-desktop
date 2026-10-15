@@ -4,6 +4,7 @@ const os=require('node:os');
 const crypto=require('node:crypto');
 const {spawn,execFileSync}=require('node:child_process');
 const {findCodexCli}=require('./engine-path.cjs');
+const {ensureBrowserCache}=require('./runtime-resources.cjs');
 const root=path.resolve(__dirname,'..');
 // The private installation pins Node alongside its native dependencies.
 // A Homebrew Node update must not restart this runtime with a different ABI.
@@ -37,14 +38,15 @@ async function run(){
   }
   fs.mkdirSync(state,{recursive:true,mode:0o700});
   if(!fs.existsSync(tokenPath))fs.writeFileSync(tokenPath,crypto.randomBytes(32).toString('hex'),{mode:0o600,flag:'wx'});
+  const build=JSON.parse(fs.readFileSync(path.join(__dirname,'build-info.json'),'utf8'));
+  const resources=path.join(build.app,'Contents/Resources');
+  ensureBrowserCache(resources,path.join(os.homedir(),'.codex'));
   let h=await health();
   if(!h){
     if(fs.existsSync(pidFile)){
       const pid=Number(fs.readFileSync(pidFile,'utf8'));
       try{process.kill(pid,0);throw Error(`Auxiliary process ${pid} exists but is unhealthy. Inspect runtime/server.log before restarting.`);}catch(error){if(error.code!=='ESRCH')throw error;}
     }
-    const build=JSON.parse(fs.readFileSync(path.join(__dirname,'build-info.json'),'utf8'));
-    const resources=path.join(build.app,'Contents/Resources');
     const cli=findCodexCli(resources);
     const profile=path.join(state,'electron-profile');fs.mkdirSync(profile,{recursive:true,mode:0o700});
     const globalState=path.join(os.homedir(),'.codex/.codex-global-state.json'),backup=path.join(state,'global-state-before-viewer.json');

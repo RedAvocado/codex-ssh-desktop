@@ -24,9 +24,9 @@ function render(state) {
   for (const side of ['remote', 'local']) {
     const data = state.catalog[side], label = side === 'remote' ? 'Remote Mac' : 'This Mac';
     if (data?.error) errors.append(text('p', `${label}: ${data.error}`, 'empty'));
-    if (data?.skipped) errors.append(text('p', `${label}: ${data.skipped} incomplete or unsupported profile(s) were skipped. Capture them again in Codex Vitals.`, 'empty'));
+    if (data?.skipped) errors.append(text('p', `${label}: ${data.skipped} incomplete or unsupported profile(s) were skipped. Capture them again in Headroom.`, 'empty'));
   }
-  if (!rows.length) container.append(text('p', 'No desktop OAuth profiles found. Capture an account in Codex Vitals, then refresh.', 'empty'));
+  if (!rows.length) container.append(text('p', 'No desktop OAuth profiles found. Capture an account in Headroom, then refresh.', 'empty'));
   for (const row of rows) {
     const card = text('article', '', 'account'); card.dataset.accountId = row.id;
     const details = text('div', '', 'account-details');

@@ -178,6 +178,33 @@ class AccountsTests(unittest.TestCase):
         self.assertEqual(exported['tokens']['refresh_token'], 'rotated-refresh')
         self.assertEqual(file.read_bytes(), before)
 
+    def test_switch_rereads_headroom_after_shutdown_without_writing_its_store(self):
+        self.capture(self.target)
+        newer = auth('second@example.test', 'workspace-b', 400, 'headroom-rotated-refresh')
+        processes = FakeProcesses(self.store)
+        def stop():
+            self.capture(newer)
+        processes.stop = stop
+        helper.switch_account(self.store, self.target_id, processes)
+        self.assertEqual(helper.read_json(self.store.live), newer)
+        self.assertEqual(helper.read_json(next((self.store.vitals / 'profiles').glob('*/auth.json'))), newer)
+
+    def test_cli_resolution_supports_manifest_current_and_legacy_layouts(self):
+        resources = Path(self.temp.name).resolve() / 'Resources'
+        manifest = resources / 'codex-cli/codex-package.json'
+        for relative in ['codex', 'codex-cli/bin/codex', 'codex-cli/custom/engine']:
+            engine = resources / relative
+            engine.parent.mkdir(parents=True, exist_ok=True)
+            engine.write_text('#!/bin/sh\n')
+            engine.chmod(0o700)
+            if relative.endswith('engine'):
+                helper.atomic_json(manifest, {'entrypoint': 'custom/engine'})
+            self.assertEqual(helper.resolve_cli(resources), engine)
+        helper.atomic_json(manifest, {'entrypoint': '../../outside'})
+        self.assertEqual(helper.resolve_cli(resources), resources / 'codex-cli/bin/codex')
+        (resources / 'codex-cli/bin/codex').chmod(0o600)
+        self.assertEqual(helper.resolve_cli(resources), resources / 'codex')
+
     def test_symlink_destination_and_concurrent_operation_are_refused(self):
         destination = self.store.root / 'link.json'
         destination.symlink_to(self.store.live)
@@ -320,6 +347,42 @@ class AccountsTests(unittest.TestCase):
         with patch.object(os, 'kill') as kill:
             processes.signal_same(previous, signal.SIGKILL)
             kill.assert_not_called()
+
+    def test_force_stop_tracks_orphans_and_stops_daemon_before_swap(self):
+        processes = object.__new__(helper.MacProcesses)
+        processes.root = Path(self.temp.name)
+        processes.app = Path('/Applications/ChatGPT.app')
+        processes.executable = processes.app / 'Contents/MacOS/ChatGPT'
+        processes.engine = processes.app / 'Contents/Resources/codex-cli/bin/codex'
+        processes.runtime_pid = None
+        rows = {11: {'exe': str(processes.executable), 'parent': 1, 'start': 'a'},
+                12: {'exe': '/usr/bin/python3', 'parent': 11, 'start': 'b'},
+                99: {'exe': '/unrelated/app', 'parent': 1, 'start': 'c'}}
+        processes.snapshot = lambda: dict(rows)
+        signals = []
+        def kill(pid, sig):
+            signals.append((pid, sig))
+            if pid == 11 or sig == signal.SIGKILL:
+                rows.pop(pid, None)
+            if pid == 11:
+                rows[12]['parent'] = 1
+        with patch.object(helper, 'run_command') as command, patch.object(os, 'kill', kill), \
+                patch.object(time, 'sleep'), patch.object(time, 'monotonic', side_effect=[0, 11]):
+            processes.stop()
+        command.assert_called_once_with([str(processes.engine), 'app-server', 'daemon', 'stop'])
+        self.assertIn((12, signal.SIGKILL), signals)
+        self.assertEqual(set(rows), {99})
+        processes.assert_stopped()
+
+    def test_unstoppable_orphan_blocks_the_switch(self):
+        processes = object.__new__(helper.MacProcesses)
+        processes.app = Path('/Applications/ChatGPT.app')
+        processes.runtime_pid = None
+        orphan = {'exe': '/usr/bin/python3', 'parent': 1, 'start': 'a'}
+        processes.stopping = {12: orphan}
+        processes.snapshot = lambda: {12: orphan}
+        with self.assertRaisesRegex(helper.AccountError, 'still running'):
+            processes.assert_stopped()
 
 
 if __name__ == '__main__':
