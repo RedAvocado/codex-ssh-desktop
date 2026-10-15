@@ -152,6 +152,14 @@
       frame.src = destination.href;
       frame.allow = 'microphone';
       frame.hidden = true;
+      // The viewer can post its ready message while the shell is refreshing
+      // the computer list. A completed load is a second chance to synchronize
+      // the frame before it can remain hidden with an active chat writer.
+      frame.addEventListener('load', () => {
+        readyFrames.add(frame);
+        if (computer.id === selected) sendState(computer);
+        sendVisibility(computer);
+      });
       frames.set(id, frame); $('viewers').append(frame);
     }
     for (const [key, other] of frames) other.hidden = key !== id;

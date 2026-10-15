@@ -105,6 +105,20 @@ test('hidden and backgrounded computer frames park without discarding drafts',as
  for(const frame of f.frames())for(const message of frame.messages.filter(message=>message.data.type==='codex-computer-visibility'))
    assert.equal(message.origin,new URL(frame.src).origin,'visibility control stays on each configured origin');
 });
+test('iframe load synchronizes visibility when its one-time ready message was missed',async()=>{
+ const f=await fixture(),studio=f.frames()[0];
+ assert.equal(studio.messages.length,0);
+ studio.listeners.load();
+ assert.deepEqual(studio.messages.filter(message=>message.data.type==='codex-computer-visibility').map(message=>message.data.visible),[true]);
+ await f.select('laptop');
+ const laptop=f.frames()[1];
+ assert.equal(studio.messages.at(-1).data.visible,false,'hidden first Mac must park');
+ laptop.listeners.load();
+ assert.equal(laptop.messages.at(-1).data.visible,true,'selected second Mac must wake');
+ await f.select('studio');
+ assert.equal(laptop.messages.at(-1).data.visible,false);
+ assert.equal(studio.messages.filter(message=>message.data.type==='codex-computer-visibility').at(-1).data.visible,true);
+});
 test('offline choices disappear and a failed switch leaves the current view intact',async()=>{
  const f=await fixture(),first=f.frames()[0];
  f.setOnline('laptop',false);await f.select('laptop');
