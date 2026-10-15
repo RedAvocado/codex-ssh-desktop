@@ -5,6 +5,7 @@ import {patchGoalResume} from './goal-resume-patch.mjs';
 import {patchLocalTranscription} from './transcription-patch.mjs';
 import {patchBrowserServicePath} from './plugin-path-patch.mjs';
 import {patchPrivateAnalytics} from './analytics-patch.mjs';
+import {patchPrivateRemoteControl} from './private-remote-control-patch.mjs';
 import {patchOwnership,patchOwnerFollowing,patchConflictRecovery} from './ownership-patch.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -41,6 +42,7 @@ main=replaceOne(main,currentBuild?/async whenReady\(\)\{let e;if\(this\.startupR
   'async whenReady(){if(this.startupReady!=null){let e=Promise.withResolvers(),t=()=>e.reject(new DOMException(`Renderer was destroyed`,`AbortError`));this.origin.once(`destroyed`,t);try{await Promise.race([this.startupReady,e.promise])}finally{this.origin.off(`destroyed`,t)}}if(this.isDisposed||this.origin.isDestroyed())throw new DOMException(`Renderer was destroyed`,`AbortError`)}','independent view lifecycle');
 main=replaceOne(main,/encodingLevel=`structuredClonable`/,'encodingLevel=`jsonCompatible`','host port encoding');
 main=patchBrowserServicePath(main);
+if(currentBuild)main=patchPrivateRemoteControl(main);
 fs.writeFileSync(mainPath,main);
 
 const htmlPath=path.join(out,'webview/index.html');

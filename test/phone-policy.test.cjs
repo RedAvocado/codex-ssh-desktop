@@ -29,11 +29,19 @@ test('WebSockets and mutations need matching origin and private cookie as well a
  req.headers.origin='https://evil.example';assert.equal(validPhoneRequest(req,origin,allowed,'secret',true),false);
  req.headers.origin=origin.origin;req.headers['sec-fetch-site']='cross-site';assert.equal(validPhoneRequest(req,origin,allowed,'secret'),false);
 });
-test('only static code and fonts are cacheable, never task content or API data',()=>{
+test('only packaged code, fonts and hashed images are cacheable, never task content or API data',()=>{
  assert.equal(staticAsset('/assets/app-abc.js','text/javascript'),true);
  assert.equal(staticAsset('/assets/preload.js','application/javascript'),true);
  assert.equal(immutableStaticAsset('/assets/app-initial-b21bd554b363.js','text/javascript'),true);
  assert.equal(immutableStaticAsset('/assets/preload.js','application/javascript'),false);
+ assert.equal(immutableStaticAsset('/assets/hoots-spritesheet-v8-21cacd193ace.webp','image/webp'),true);
+ assert.equal(immutableStaticAsset('/assets/image-8f9bb7894769.png','image/png'),true);
+ assert.equal(staticAsset('/assets/unhashed.webp','image/webp'),false);
+ assert.equal(staticAsset('/assets/image-8f9bb7894769.png','text/html'),false);
+ for(const url of ['/assets/../private-abcdef12.webp','/assets/./private-abcdef12.webp','/assets/%2e%2e/private-abcdef12.webp','/assets/%2e./private-abcdef12.webp']) {
+  assert.equal(staticAsset(url,'image/webp'),false);
+  assert.equal(immutableStaticAsset(url,'image/webp'),false);
+ }
  assert.equal(immutableStaticAsset('/thread/private','text/html'),false);
  for(const [url,type] of [['/thread/private','text/html'],['/__health','application/json'],['/assets/missing.js','text/html'],['/assets/account.json','application/json'],['/@fs/secret.js','text/javascript']])assert.equal(staticAsset(url,type),false);
 });

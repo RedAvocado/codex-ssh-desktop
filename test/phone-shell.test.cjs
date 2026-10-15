@@ -8,11 +8,11 @@ async function fixture({path='/',saved={},touch=true,holdFull=false,failFull=fal
  let releaseFull;
  const fullReady=holdFull?new Promise(resolve=>{releaseFull=resolve;}):null;
  const requests=[];
- const events={},storage=new Map(Object.entries(saved)),nodes={};
+ const events={},documentEvents={},storage=new Map(Object.entries(saved)),nodes={};
  const classes=new Set(),styles=new Map(),viewportEvents={};
  const root={clientHeight:844,classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);}},style:{setProperty:(name,value)=>styles.set(name,value),removeProperty:name=>styles.delete(name)}};
  const viewport={height:844,offsetTop:0,scale:1,addEventListener:(name,callback)=>{viewportEvents[name]=callback;}};
- const document={documentElement:root,hidden:false,activeElement:null,getElementById:id=>nodes[id],addEventListener(){},createElement:tag=>new Element(tag)};
+ const document={documentElement:root,hidden:false,activeElement:null,getElementById:id=>nodes[id],addEventListener(name,callback){documentEvents[name]=callback;},createElement:tag=>new Element(tag)};
  class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.attrs={};this.listeners={};this.hidden=false;if(tag==='iframe'){this.messages=[];this.contentWindow={postMessage:(data,origin)=>this.messages.push({data,origin})};}}
   append(...children){for(const child of children){child.parent=this;this.children.push(child);}}
@@ -36,7 +36,7 @@ async function fixture({path='/',saved={},touch=true,holdFull=false,failFull=fal
  vm.runInNewContext(fs.readFileSync(require.resolve('../desktop/phone-shell.js'),'utf8'),context);
  await tick();await tick();
  if(!holdFull)for(let attempt=0;attempt<8&&nodes['computer-options'].children.length<directory.length;attempt++)await tick();
- return {nodes,events,storage,classes,styles,viewport,viewportEvents,requests,releaseFull,get location(){return location;},frames:()=>nodes.viewers.children.filter(c=>c.tag==='iframe'),options:()=>nodes['computer-options'].children,setOnline(id,value){directory.find(c=>c.id===id).online=value;},fail(){fails=true;},async refresh(){await nodes.refresh.onclick();await tick();},async select(id){nodes['computer-options'].children.find(c=>c.dataset.computer===id).onclick();await tick();await tick();}};
+ return {nodes,events,documentEvents,document,storage,classes,styles,viewport,viewportEvents,requests,releaseFull,get location(){return location;},frames:()=>nodes.viewers.children.filter(c=>c.tag==='iframe'),options:()=>nodes['computer-options'].children,setOnline(id,value){directory.find(c=>c.id===id).online=value;},fail(){fails=true;},async refresh(){await nodes.refresh.onclick();await tick();},async select(id){nodes['computer-options'].children.find(c=>c.dataset.computer===id).onclick();await tick();await tick();}};
 }
 test('selected computer starts loading before another computer finishes its health probe',async()=>{
  const local=await fixture({holdFull:true});
@@ -81,6 +81,29 @@ test('switching retains separate frame instances and never replaces a draft',asy
  assert.equal(first.hidden,true);assert.equal(second.hidden,false);
  await f.select('studio');assert.equal(f.frames().length,2);assert.equal(f.frames()[0],first);assert.equal(first.draft,'keep studio input');assert.equal(second.draft,'keep laptop input');
  assert.equal(new URL(second.src).origin,computers[1].origin);
+});
+test('hidden and backgrounded computer frames park without discarding drafts',async()=>{
+ const f=await fixture(),studio=f.frames()[0];studio.draft='unsent draft';
+ const ready=(computer,frame)=>f.events.message({origin:computer.origin,source:frame.contentWindow,data:{type:'codex-computer-ready'}});
+ const visibility=frame=>frame.messages.filter(message=>message.data.type==='codex-computer-visibility').map(message=>message.data.visible);
+ ready(computers[0],studio);
+ assert.deepEqual(visibility(studio),[true]);
+ await f.select('laptop');const laptop=f.frames()[1];
+ assert.deepEqual(visibility(studio),[true,false]);
+ ready(computers[1],laptop);
+ assert.deepEqual(visibility(laptop),[true]);
+ f.document.hidden=true;await f.documentEvents.visibilitychange();
+ assert.deepEqual(visibility(laptop),[true,false]);
+ f.document.hidden=false;await f.documentEvents.visibilitychange();
+ assert.deepEqual(visibility(laptop),[true,false,true]);
+ f.events.pagehide();assert.equal(visibility(laptop).at(-1),false);
+ f.events.pageshow();assert.equal(visibility(laptop).at(-1),true);
+ await f.select('studio');
+ assert.equal(visibility(laptop).at(-1),false);
+ assert.equal(visibility(studio).at(-1),true);
+ assert.equal(studio.draft,'unsent draft');
+ for(const frame of f.frames())for(const message of frame.messages.filter(message=>message.data.type==='codex-computer-visibility'))
+   assert.equal(message.origin,new URL(frame.src).origin,'visibility control stays on each configured origin');
 });
 test('offline choices disappear and a failed switch leaves the current view intact',async()=>{
  const f=await fixture(),first=f.frames()[0];

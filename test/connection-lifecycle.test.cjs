@@ -2,8 +2,9 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
 let uuidCounter=0;
 
-function connection({recoveryStore,draft=()=>false,attachment=()=>false}={}){
+function connection({recoveryStore,draft=()=>false,attachment=()=>false,framed=false}={}){
  const sockets=[],window=new EventTarget(),document=new EventTarget(),timers=new Map();let timerId=0;
+ const parent=new EventTarget();window.parent=framed?parent:window;
  let reloads=0,now=Date.now();document.hidden=false;
  document.querySelectorAll=selector=>{
   const hasAttachment=selector.includes('Remove attachment');
@@ -22,13 +23,17 @@ function connection({recoveryStore,draft=()=>false,attachment=()=>false}={}){
  const exports={};
  const source=ts.transpileModule(fs.readFileSync(require.resolve('../src/browser/connection.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  vm.runInNewContext(source,{exports,require:()=>require('../src/shared/reliable-channel.js'),window,document,WebSocket:Socket,console,
-  crypto:{randomUUID:()=> `11111111-1111-4111-8111-${String(++uuidCounter).padStart(12,'0')}`},location:{protocol:'https:',host:'private.test',reload:()=>reloads++},
+  crypto:{randomUUID:()=> `11111111-1111-4111-8111-${String(++uuidCounter).padStart(12,'0')}`},
+  URL,URLSearchParams,location:{protocol:'https:',host:'private.test',pathname:framed?'/__phone/viewer':'/',search:framed?'?parent=https%3A%2F%2Fshell.test':'',reload:()=>reloads++},
   sessionStorage:recoveryStore?{getItem:key=>recoveryStore.get(key)??null,setItem:(key,value)=>recoveryStore.set(key,value)}:undefined,
   HTMLInputElement:class{},HTMLTextAreaElement:class{},Date:{now:()=>now},
   setTimeout:callback=>{timers.set(++timerId,callback);return timerId},clearTimeout:id=>timers.delete(id)});
  const failures=[],send=exports.connectRenderer(()=>{},reason=>failures.push(reason)),socket=sockets[0];socket.open();
  const pagehide=persisted=>{const event=new Event('pagehide');Object.defineProperty(event,'persisted',{value:persisted});window.dispatchEvent(event)};
- return {socket,sockets,send,pagehide,timers,document,failures,
+ const parentMessage=(visible,{origin='https://shell.test',source=parent}={})=>{
+  const event=new Event('message');Object.defineProperties(event,{origin:{value:origin},source:{value:source},data:{value:{type:'codex-computer-visibility',visible}}});window.dispatchEvent(event);
+ };
+ return {socket,sockets,send,pagehide,parentMessage,timers,document,failures,
   advance:milliseconds=>{now+=milliseconds},get reloads(){return reloads}};
 }
 
@@ -62,6 +67,34 @@ test('hiding and returning the phone parks then restores the same view',()=>{
  assert.equal(f.socket.readyState,1);
  assert.equal(f.socket.sent.at(-1).type,'bridge-unpark');
  f.pagehide(false);
+});
+
+test('computer iframe stays parked until its trusted shell selects it',()=>{
+ const f=connection({framed:true});f.socket.receive({type:'bridge-welcome',ack:0});
+ assert.deepEqual(f.socket.sent.map(frame=>frame.type),['bridge-hello','bridge-park']);
+ f.parentMessage(true,{origin:'https://untrusted.test'});
+ f.parentMessage(true,{source:{}});
+ f.parentMessage('yes');
+ assert.equal(f.socket.sent.at(-1).type,'bridge-park');
+ f.parentMessage(true);
+ assert.equal(f.socket.sent.at(-1).type,'bridge-unpark');
+ f.parentMessage(false);
+ assert.equal(f.socket.sent.at(-1).type,'bridge-park');
+ f.advance(46_000);f.parentMessage(true);
+ assert.deepEqual(f.socket.sent.slice(-2).map(frame=>frame.type),['bridge-unpark','bridge-probe']);
+ f.socket.receive({type:'bridge-probe-ack'});
+ f.pagehide(false);
+});
+
+test('a parked computer iframe defers its reset reload until selected again',()=>{
+ const f=connection({framed:true,recoveryStore:new Map()});f.socket.receive({type:'bridge-welcome',ack:0});
+ f.socket.receive({type:'bridge-reset'});
+ for(const callback of [...f.timers.values()])callback();
+ assert.equal(f.reloads,0);
+ f.parentMessage(true,{origin:'https://untrusted.test'});
+ assert.equal(f.reloads,0);
+ f.parentMessage(true);
+ assert.equal(f.reloads,1);
 });
 
 test('a foreground probe only reconnects when the socket does not answer',()=>{

@@ -9,11 +9,22 @@ function validPhoneRequest(req, origin, allowedPeers, csrf, upgrade=false) {
  return true;
 }
 function staticAsset(url, contentType) {
- return /^\/assets\/[A-Za-z0-9_./-]+\.(?:js|css|woff2?|ttf)(?:\?.*)?$/.test(url || '') &&
-  /^(?:text\/css|(?:text|application)\/javascript|application\/x-javascript|font\/|application\/font)/.test(String(contentType));
+ const source = String(url || ''), type = String(contentType);
+ // Never assign a long-lived cache header to a path that can escape /assets/.
+ // Decode each segment as well so encoded dot segments stay excluded if the
+ // asset filename grammar changes later.
+ for (const segment of source.split('?', 1)[0].split('/')) {
+  let decoded;
+  try {decoded = decodeURIComponent(segment);} catch {return false;}
+  if (decoded === '.' || decoded === '..') return false;
+ }
+ return (/^\/assets\/[A-Za-z0-9_./-]+\.(?:js|css|woff2?|ttf)(?:\?.*)?$/.test(source) &&
+   /^(?:text\/css|(?:text|application)\/javascript|application\/x-javascript|font\/|application\/font)/.test(type)) ||
+  (/^\/assets\/[A-Za-z0-9_./-]+-[a-f0-9]{8,}\.(?:avif|gif|jpe?g|png|svg|webp)(?:\?.*)?$/.test(source) &&
+   /^image\/(?:avif|gif|jpeg|png|svg\+xml|webp)(?:;|$)/.test(type));
 }
 function immutableStaticAsset(url, contentType) {
- return staticAsset(url,contentType) && /-[a-f0-9]{8,}\.(?:js|css|woff2?|ttf)(?:\?.*)?$/.test(url || '');
+ return staticAsset(url,contentType) && /-[a-f0-9]{8,}\.(?:js|css|woff2?|ttf|avif|gif|jpe?g|png|svg|webp)(?:\?.*)?$/.test(url || '');
 }
 module.exports={validPhoneRequest,staticAsset,immutableStaticAsset,phoneConfiguration,acceptsGzip};
 const {isIP}=require('node:net');

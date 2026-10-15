@@ -77,6 +77,11 @@ computer bar; on phones the switcher sits inside the task drawer and action
 menu, leaving one compact header. The existing desktop SSH client retains its
 original interface.
 
+Switching computers parks the hidden view. Returning within two minutes
+resumes it; after that, the old view releases its chat writer and reopens when
+selected again. An unsent draft stays on its page and is never submitted by
+the switcher.
+
 ### Configure a second Mac
 
 1. Install and prepare a supported auxiliary viewer and private phone gateway
@@ -306,6 +311,26 @@ renderer patch is supported for prepared desktop version `26.911.61220`.
 Temporary recordings are private and removed after transcription or failure.
 There is no external transcription fallback for this path. Sending the
 resulting prompt still sends normal task context to the configured AI provider.
+
+### Keep OpenAI Remote disabled in the private viewer
+
+The prepared `26.911.61220` auxiliary desktop used by this viewer can inherit
+the native Codex app's Remote setting. That setting causes its separate
+app-server to try registering with OpenAI Remote, even though the phone viewer
+uses Tailscale. `desktop/prepare.mjs` applies an exact-build patch that keeps
+Remote disabled in the auxiliary process, rejects attempts to enable it from
+that process's settings, and prevents a restart from re-enabling it. The native
+Codex installation and its own Remote setting are untouched.
+
+When updating an existing prepared runtime, apply
+`desktop/private-remote-control-patch.mjs` to a **staging copy** of the prepared
+`scratch/asar/.vite/build/main-DS3FMq4P.js`, verify the result with
+`node --check`, back up the installed file, then copy the staged file into the
+auxiliary installation and restart only its backend. Do not run `prepare.mjs`
+against a newer native Codex release until that release is explicitly supported.
+After restart, inspect new auxiliary logs for Remote control WebSocket attempts;
+older log entries remain from the previous runtime. Normal Codex AI requests
+and tools still use their configured providers.
 
 ## Privacy boundaries
 

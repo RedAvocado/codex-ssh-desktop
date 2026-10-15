@@ -92,7 +92,13 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
   reply.once('aborted',()=>unavailable(res));
   const h={...reply.headers,'cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY'};
   delete h['set-cookie'];
-  const compress=acceptsGzip(req.headers['accept-encoding']) && !req.headers.range && req.method!=='HEAD' && reply.statusCode===200;
+  // Images and fonts are already compressed. Compress larger text responses,
+  // including task JSON, without spending CPU on tiny replies or binary data.
+  const type=String(h['content-type']||'').split(';',1)[0].trim().toLowerCase();
+  const textResponse=/^(?:text\/(?:html|css|javascript|plain|xml)|application\/(?:javascript|x-javascript|json|xml|[a-z0-9.+-]+\+(?:json|xml))|image\/svg\+xml)$/.test(type);
+  const size=Number(h['content-length']);
+  const compress=acceptsGzip(req.headers['accept-encoding']) && !req.headers.range && req.method!=='HEAD' && reply.statusCode===200 &&
+   !h['content-encoding'] && textResponse && (!Number.isFinite(size) || size>=1024);
   const asset=staticAsset(req.url,h['content-type']) || (reply.statusCode===304 && staticAsset(req.url,'text/javascript'));
   if(asset){
    // The large Codex renderer has content-hashed filenames. Reuse its code on
@@ -114,8 +120,10 @@ const server=https.createServer({cert:fs.readFileSync(path.join(runtime,'phone.c
     if(compress){h['content-encoding']='gzip';h.vary='Accept-Encoding';gzip(body,(error,data)=>{if(error){unavailable(res);return;}if(res.destroyed||res.writableEnded)return;res.writeHead(reply.statusCode,h);res.end(data);});}
     else{res.writeHead(reply.statusCode,h);res.end(body);}
    });
-  }else if(asset&&compress){
-    delete h['content-length'];h['content-encoding']='gzip';res.writeHead(reply.statusCode,h);
+  }else if(compress){
+    delete h['content-length'];h['content-encoding']='gzip';
+    if(!String(h.vary||'').split(',').some(value=>value.trim().toLowerCase()==='accept-encoding')) h.vary=h.vary?`${h.vary}, Accept-Encoding`:'Accept-Encoding';
+    res.writeHead(reply.statusCode,h);
     pipeline(reply,createGzip(),res,()=>{});
   }else{res.writeHead(reply.statusCode,h);pipeline(reply,res,()=>{});}
  });

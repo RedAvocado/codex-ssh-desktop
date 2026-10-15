@@ -1,12 +1,12 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {WebSocket,WebSocketServer}=require('ws');const {once}=require('node:events');const {randomUUID}=require('node:crypto');
 const {resumableBridge}=require('../src/server/resumable-bridge.js');
-function syntheticBridge(t,create){
+function syntheticBridge(t,create,ttl){
  const {EventEmitter}=require('node:events');
  const server=new EventEmitter(),socket=new EventEmitter();socket.readyState=WebSocket.OPEN;socket.frames=[];
  socket.send=raw=>socket.frames.push(JSON.parse(raw));socket.ping=()=>{};
  socket.close=socket.terminate=()=>{if(socket.readyState===WebSocket.CLOSED)return;socket.readyState=WebSocket.CLOSED;socket.emit('close')};
- const health=resumableBridge(server,create);server.emit('connection',socket);
+ const health=resumableBridge(server,create,ttl);server.emit('connection',socket);
  t.after(()=>{socket.close();server.emit('close')});
  return {socket,health,hello(){socket.emit('message',JSON.stringify({type:'bridge-hello',sessionId:randomUUID(),resume:false,ack:0}))}};
 }
@@ -22,6 +22,15 @@ test('asynchronous renderer initialization failure can terminate its welcomed se
  let fail,disposed=0;const f=syntheticBridge(t,(_send,reject)=>{fail=reject;return{receive(){},dispose(){disposed++}}});
  f.hello();assert.equal(typeof fail,'function');fail('fixture initialization failure');fail('repeated failure');
  assert.deepEqual(f.socket.frames.map(frame=>frame.type),['bridge-welcome','bridge-reset']);assert.equal(f.health().length,0);assert.equal(disposed,1);
+});
+test('duplicate park and socket close keep a view’s original expiry',t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+ let disposed=0;const f=syntheticBridge(t,()=>({receive(){},dispose:()=>disposed++}),100);
+ f.hello();f.socket.emit('message',JSON.stringify({type:'bridge-park'}));
+ t.mock.timers.tick(40);f.socket.emit('message',JSON.stringify({type:'bridge-park'}));
+ t.mock.timers.tick(20);f.socket.close();
+ t.mock.timers.tick(39);assert.equal(f.health().length,1);
+ t.mock.timers.tick(1);assert.equal(f.health().length,0);assert.equal(disposed,1);
 });
 test('real sockets preserve a view across disconnects, deduplicate requests, replay results and expire safely',async t=>{
  let created=0,disposed=0;const received=[];
@@ -115,6 +124,29 @@ test('a fresh phone page retires only its disconnected predecessor and an idle p
  assert.equal(created,3);assert.equal(disposed,1);assert.equal(health().length,2);
  assert.equal(health().filter(session=>session.connected).length,2);
  fresh.s.terminate();active.s.terminate();
+});
+
+test('a fresh phone page retires its parked predecessor before creating another renderer',async t=>{
+ let created=0,disposed=0;
+ const wss=new WebSocketServer({host:'127.0.0.1',port:0});await once(wss,'listening');
+ const health=resumableBridge(wss,()=>{created++;return {receive(){},dispose:()=>disposed++}},200);
+ t.after(()=>{for(const s of wss.clients)s.terminate();wss.close()});
+ const url=`ws://127.0.0.1:${wss.address().port}`,clientId=randomUUID();
+ async function connect(){
+  const s=new WebSocket(url);await once(s,'open');
+  const response=once(s,'message');
+  s.send(JSON.stringify({type:'bridge-hello',sessionId:randomUUID(),clientId,resume:false,ack:0}));
+  assert.equal(JSON.parse((await response)[0]).type,'bridge-welcome');return s;
+ }
+ const first=await connect();
+ const closed=once(first,'close');
+ const probe=once(first,'message');first.send(JSON.stringify({type:'bridge-park'}));first.send(JSON.stringify({type:'bridge-probe'}));await probe;
+ assert.equal(health()[0].parked,true);
+ const fresh=await connect();
+ await Promise.race([closed,new Promise(resolve=>setTimeout(resolve,100))]);
+ assert.equal(created,2);assert.equal(disposed,1);
+ assert.equal(health().length,1);assert.equal(health()[0].connected,true);
+ fresh.terminate();
 });
 
 test('a new authorized page evicts the oldest detached view at capacity but never an active view',async t=>{

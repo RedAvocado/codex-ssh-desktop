@@ -18,11 +18,17 @@ async function fixture(t,{legacy=false,computerMode=false}={}){
   if(req.url==='/broken-html'||req.url==='/broken-text'){
    res.writeHead(200,{'content-type':req.url.endsWith('html')?'text/html':'text/plain','content-length':1000});
    res.write('partial');setImmediate(()=>res.destroy());
+  }else if(req.url==='/assets/hoots-spritesheet-v8-21cacd193ace.webp'){
+   res.writeHead(200,{'content-type':'image/webp','content-length':2048});res.end(Buffer.alloc(2048,0x7f));
   }else if(req.url==='/assets/test.js'||req.url==='/assets/app-initial-b21bd554b363.js'){
    if(req.headers['if-none-match']==='"fixture"'){res.writeHead(304,{etag:'"fixture"'});res.end();return;}
    res.writeHead(200,{'content-type':'text/javascript',etag:'"fixture"','content-length':Buffer.byteLength(source)});res.end(source);
   }else if(req.url==='/__health'){res.setHeader('content-type','application/json');res.end('{"ready":true,"private":"must not escape health"}')}
   else if(req.url==='/api'){res.setHeader('content-type','application/json');res.end('{"private":"test"}')}
+  else if(req.url==='/api-large'){
+   const body=JSON.stringify({private:'test',messages:'repeatable task state '.repeat(300)});
+   res.writeHead(200,{'content-type':'application/json','content-length':Buffer.byteLength(body),'vary':'Origin'});res.end(body);
+  }
   else{res.setHeader('content-type','text/html');res.end('<html>ws://127.0.0.1:18214</html>')}
  });
  const upstreamSockets=new WebSocketServer({server:backend}),commands=[];let views=0;
@@ -51,9 +57,17 @@ test('gateway enforces its boundary, compresses static code and keeps API respon
  const {request,source,origin}=await fixture(t);
  const asset=await request('/assets/test.js',{'accept-encoding':'gzip'});assert.equal(asset.status,200);assert.equal(asset.headers['content-encoding'],'gzip');assert.equal(gunzipSync(asset.body).toString(),source);assert.ok(asset.body.length<source.length/10);assert.match(asset.headers['cache-control'],/^private/);assert.equal(asset.headers['set-cookie'],undefined);
  const hashed=await request('/assets/app-initial-b21bd554b363.js');assert.equal(hashed.status,200);assert.equal(hashed.headers['cache-control'],'private, max-age=31536000, immutable');
+ const image=await request('/assets/hoots-spritesheet-v8-21cacd193ace.webp',{'accept-encoding':'gzip'});
+ assert.equal(image.status,200);assert.equal(image.headers['cache-control'],'private, max-age=31536000, immutable');
+ assert.equal(image.headers['content-encoding'],undefined,'already compressed images must not be gzipped again');
+ assert.equal(image.body.length,2048);
  assert.equal(asset.headers['cache-control'],'private, max-age=0, must-revalidate');
  const cached=await request('/assets/test.js',{'if-none-match':'"fixture"'});assert.equal(cached.status,304);assert.match(cached.headers['cache-control'],/^private/);
  const api=await request('/api');assert.equal(api.headers['cache-control'],'no-store');assert.equal(api.headers['content-encoding'],undefined);
+ const largeApi=await request('/api-large',{'accept-encoding':'gzip'});
+ assert.equal(largeApi.headers['cache-control'],'no-store');assert.equal(largeApi.headers['content-encoding'],'gzip');
+ assert.match(largeApi.headers.vary,/Origin, Accept-Encoding/);
+ assert.equal(JSON.parse(gunzipSync(largeApi.body)).messages,'repeatable task state '.repeat(300));
  const page=await request('/');assert.match(page.headers['set-cookie'][0],/HttpOnly; SameSite=Strict/);assert.match(page.body.toString(),/wss:\/\/127.0.0.1:18443/);
  assert.equal((await request('/',{origin:'https://untrusted.example'})).status,403);
  assert.equal((await request('/__session')).status,403);

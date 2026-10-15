@@ -12,6 +12,7 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
     channel: ReliableChannel<T>;
     socket?: WebSocket;
     timer?: NodeJS.Timeout;
+    idleDeadline?: number;
     dispose: () => void;
     clientId?: string;
     detachedAt?: number;
@@ -26,9 +27,12 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
   };
   const expireAfterIdle = (id: string, session: Session) => {
     clearTimeout(session.timer);
+    // A later socket close or duplicate park must not restart the grace period
+    // and keep an abandoned renderer holding a writer indefinitely.
+    session.idleDeadline ??= Date.now() + ttl;
     session.timer = setTimeout(() => {
       if (sessions.get(id) === session) remove(id);
-    }, ttl);
+    }, Math.max(0, session.idleDeadline - Date.now()));
     session.timer.unref();
   };
   server.on('connection', socket => {
@@ -54,10 +58,11 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
         let session = sessions.get(sessionId);
         if (!session && !frame.resume && frame.ack === 0) {
           // iOS may discard a Home Screen page without delivering pagehide or
-          // its bridge-release. A fresh page from that tab supersedes only its
-          // disconnected predecessor; other open views remain independent.
+          // its bridge-release. A fresh page from that tab supersedes its
+          // disconnected or parked predecessor. An active foreground view may
+          // belong to a duplicated tab, so keep it independent.
           if (clientId) for (const [oldId, old] of sessions) {
-            if (old.clientId === clientId && old.socket?.readyState !== WebSocket.OPEN) remove(oldId);
+            if (old.clientId === clientId && (old.parked || old.socket?.readyState !== WebSocket.OPEN)) remove(oldId);
           }
           // If sessionStorage was also lost, keep the server usable: reclaim
           // the oldest detached view before rejecting a new authorized page.
@@ -100,7 +105,7 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
             return;
           }
         }
-        id = sessionId; clearTimeout(helloDeadline); clearTimeout(session.timer); session.timer = undefined;
+        id = sessionId; clearTimeout(helloDeadline); clearTimeout(session.timer); session.timer = undefined; session.idleDeadline = undefined;
         const previous = session.socket; session.socket = socket; session.detachedAt = undefined; session.parked = false;
         if (previous !== socket) previous?.close(1000, 'Connection replaced');
         socket.send(JSON.stringify({type:'bridge-welcome', ack:session.channel.received}));
@@ -116,7 +121,7 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
         }
         if (frame?.type === 'bridge-park') { session.parked = true; expireAfterIdle(id, session); return; }
         if (frame?.type === 'bridge-unpark') {
-          session.parked = false; clearTimeout(session.timer); session.timer = undefined; return;
+          session.parked = false; clearTimeout(session.timer); session.timer = undefined; session.idleDeadline = undefined; return;
         }
         try { session.channel.receive(frame); }
         catch { session.channel.abort('renderer dispatch failed'); }

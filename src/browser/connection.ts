@@ -14,6 +14,20 @@ export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (re
       return next;
     } catch { return crypto.randomUUID(); }
   })();
+  const shellOrigin = (() => {
+    if (location.pathname !== '/__phone/viewer' || window.parent === window) return undefined;
+    try {
+      const raw = new URLSearchParams(location.search).get('parent');
+      if (!raw) return undefined;
+      const parent = new URL(raw);
+      if (parent.protocol === 'https:' && parent.origin === raw) return parent.origin;
+    } catch { /* A malformed parent cannot control this connection. */ }
+    return undefined;
+  })();
+  // CSS-hidden computer iframes do not receive document.visibilitychange.
+  // Wait for the trusted shell to select this frame before keeping a view live.
+  let shellVisible = !shellOrigin;
+  const visible = () => !document.hidden && shellVisible;
   let socket: WebSocket | undefined;
   let resume = false, ready = false, stopped = false, attempts = 0, lastMessageAt = Date.now();
   let retry: ReturnType<typeof setTimeout> | undefined;
@@ -63,13 +77,15 @@ export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (re
     onFailure(reason);
     if (reopening) {
       const reopen = () => {
-        if (document.hidden) return;
+        if (!visible()) return;
         document.removeEventListener('visibilitychange', reopen);
+        window.removeEventListener('message', reopen);
         if (hasUnsentWork()) {status(true); return;}
         location.reload();
       };
       setTimeout(reopen, 1200);
       document.addEventListener('visibilitychange', reopen);
+      if (shellOrigin) window.addEventListener('message', reopen);
     }
   });
   function control(type: 'bridge-park' | 'bridge-unpark') {
@@ -94,7 +110,7 @@ export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (re
           if (ready) { channel.abort(); return; }
           ready = true; resume = true; attempts = 0; clearTimeout(deadline);
           channel.attach(wire => {if (current.readyState === WebSocket.OPEN) current.send(wire);}, frame.ack);
-          if (document.hidden) control('bridge-park');
+          if (!visible()) control('bridge-park');
           if (!stopped) {notice?.remove(); notice = undefined;}
         } else if (ready) channel.receive(frame);
         else channel.abort();
@@ -111,7 +127,7 @@ export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (re
     current.addEventListener('error', () => current.close());
   }
   const wake = () => {
-    if (stopped || document.hidden) return;
+    if (stopped || !visible()) return;
     control('bridge-unpark');
     // iOS may freeze a WebSocket while the page is hidden. Check whether the
     // *same* socket still responds before replacing its live renderer.
@@ -129,8 +145,15 @@ export function connectRenderer<T>(deliver: (message: T) => void, onFailure: (re
   };
   window.addEventListener('online', wake);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {clearTimeout(probeTimeout); probeTimeout = undefined; control('bridge-park');}
+    if (!visible()) {clearTimeout(probeTimeout); probeTimeout = undefined; control('bridge-park');}
     else wake();
+  });
+  window.addEventListener('message', event => {
+    if (!shellOrigin || event.source !== window.parent || event.origin !== shellOrigin ||
+        event.data?.type !== 'codex-computer-visibility' || typeof event.data.visible !== 'boolean') return;
+    shellVisible = event.data.visible;
+    if (visible()) wake();
+    else {clearTimeout(probeTimeout); probeTimeout = undefined; control('bridge-park');}
   });
   window.addEventListener('pageshow', wake);
   window.addEventListener('pagehide', event => {

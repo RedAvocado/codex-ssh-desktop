@@ -24,7 +24,7 @@
   syncViewport();
   const frames = new Map();
   const readyFrames = new WeakSet();
-  let computers = [], selected, pending, switching = false, menuOpen = false, checked = false, availabilityError = false, timer, messageTimer, optionsSignature, menuReturn;
+  let computers = [], selected, pending, switching = false, menuOpen = false, checked = false, availabilityError = false, timer, messageTimer, optionsSignature, menuReturn, pageLeaving = false;
   const initial = new URL(location.href);
   const requested = initial.searchParams.get('computer');
   const firstPath = requested ? '/' : location.pathname + location.search + location.hash;
@@ -54,6 +54,15 @@
   function sendState(computer) {
     const frame = computer && frames.get(computer.id);
     if (frame?.contentWindow && readyFrames.has(frame)) frame.contentWindow.postMessage({type:'codex-computer-state', name:computer.name}, computer.origin);
+  }
+  function sendVisibility(computer) {
+    const frame = computer && frames.get(computer.id);
+    if (frame?.contentWindow && readyFrames.has(frame)) frame.contentWindow.postMessage({
+      type:'codex-computer-visibility', visible:computer.id === selected && !document.hidden && !pageLeaving,
+    }, computer.origin);
+  }
+  function syncFrameVisibility() {
+    for (const computer of computers) sendVisibility(computer);
   }
   function say(text) {
     clearTimeout(messageTimer); $('message').textContent = text; $('message').hidden = false;
@@ -147,6 +156,7 @@
     }
     for (const [key, other] of frames) other.hidden = key !== id;
     selected = id; switching = false;
+    syncFrameVisibility();
     try {sessionStorage.setItem('codex-computer', id);} catch {}
     // Record selection without pushing cross-host task identifiers into the
     // other computer. Each iframe keeps its own navigation and unsent input.
@@ -163,6 +173,7 @@
     } else if (event.data?.type === 'codex-computer-ready') {
       readyFrames.add(frames.get(computer.id));
       if (computer.id === selected) sendState(computer);
+      sendVisibility(computer);
     }
     else if (computer.id === selected && event.data?.type === 'codex-computer-menu' && ['drawer','header'].includes(event.data.placement)) {
       menu(true, true, {id:computer.id, window:event.source, origin:computer.origin, placement:event.data.placement}); refresh();
@@ -185,11 +196,11 @@
     clearTimeout(timer);
     if (!document.hidden) timer = setTimeout(async () => {await refresh(); schedule();}, 15000);
   };
-  const wake = async () => {if (!document.hidden) await refresh(); schedule();};
+  const wake = async () => {syncFrameVisibility(); if (!document.hidden) await refresh(); schedule();};
   window.addEventListener('online', wake);
   document.addEventListener('visibilitychange', wake);
-  window.addEventListener('pagehide', () => clearTimeout(timer));
-  window.addEventListener('pageshow', () => {syncViewport(); schedule();});
+  window.addEventListener('pagehide', () => {pageLeaving = true; syncFrameVisibility(); clearTimeout(timer);});
+  window.addEventListener('pageshow', () => {pageLeaving = false; syncFrameVisibility(); syncViewport(); schedule();});
   (async () => {
     // Start the saved/current computer as soon as its own health probe finishes.
     // Poll the complete directory concurrently so a sleeping second Mac cannot
