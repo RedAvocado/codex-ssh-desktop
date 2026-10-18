@@ -7,7 +7,7 @@ import {ReliableChannel} from '../shared/reliable-channel';
 export function resumableBridge<T>(server: WebSocketServer, create: (
   send: (message: T) => void,
   fail: (reason: string) => void,
-) => {receive: (message: T) => void; dispose: () => void}, ttl = 2 * 60_000) {
+) => {receive: (message: T) => void; dispose: () => void}, ttl = 2 * 60_000, onActivityChanged: () => void = () => {}) {
   type Session = {
     channel: ReliableChannel<T>;
     socket?: WebSocket;
@@ -24,6 +24,7 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
     sessions.delete(id); clearTimeout(session.timer);
     session.socket?.close(1000, 'View expired'); session.channel.detach();
     try { session.dispose(); } catch { console.error('[ipc-bridge] view cleanup failed'); }
+    onActivityChanged();
   };
   const expireAfterIdle = (id: string, session: Session) => {
     clearTimeout(session.timer);
@@ -110,6 +111,7 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
         if (previous !== socket) previous?.close(1000, 'Connection replaced');
         socket.send(JSON.stringify({type:'bridge-welcome', ack:session.channel.received}));
         session.channel.attach(wire => {if(socket.readyState === WebSocket.OPEN) socket.send(wire);}, frame.ack);
+        onActivityChanged();
         return;
       }
       const session = sessions.get(id);
@@ -119,9 +121,9 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
           if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type:'bridge-probe-ack'}));
           return;
         }
-        if (frame?.type === 'bridge-park') { session.parked = true; expireAfterIdle(id, session); return; }
+        if (frame?.type === 'bridge-park') { session.parked = true; expireAfterIdle(id, session); onActivityChanged(); return; }
         if (frame?.type === 'bridge-unpark') {
-          session.parked = false; clearTimeout(session.timer); session.timer = undefined; session.idleDeadline = undefined; return;
+          session.parked = false; clearTimeout(session.timer); session.timer = undefined; session.idleDeadline = undefined; onActivityChanged(); return;
         }
         try { session.channel.receive(frame); }
         catch { session.channel.abort('renderer dispatch failed'); }
@@ -133,9 +135,14 @@ export function resumableBridge<T>(server: WebSocketServer, create: (
       if (session?.socket === socket) {
         session.socket = undefined; session.detachedAt = Date.now(); session.channel.detach();
         expireAfterIdle(id!, session);
+        onActivityChanged();
       }
     });
   });
   server.on('close', () => { for (const id of sessions.keys()) remove(id); });
-  return () => [...sessions.values()].map(s => ({...s.channel.snapshot(),connected:s.socket?.readyState===WebSocket.OPEN,parked:s.parked}));
+  return Object.assign(() => [...sessions.values()].map(s => ({...s.channel.snapshot(),connected:s.socket?.readyState===WebSocket.OPEN,parked:s.parked})), {
+    releaseInactive() {
+      for (const [id, session] of sessions) if (session.parked || session.socket?.readyState !== WebSocket.OPEN) remove(id);
+    },
+  });
 }

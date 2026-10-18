@@ -22,6 +22,7 @@ import {authorized, bearerToken, tokenMatches, validHost, viewerOrigin} from './
 import {startOutboundProxy} from './outbound-proxy';
 import {resumableBridge} from './resumable-bridge';
 import {registerLocalTranscription} from './local-transcription';
+import {ViewerThreadRelease, type ViewerThreadClient} from './viewer-thread-release';
 
 type ServerOptions = {
   host: string;
@@ -243,6 +244,7 @@ type RendererWindow = {
 };
 
 type IpcMainBridgeState = {
+  setViewerThreadClient?: (client: ViewerThreadClient) => void;
   setRendererWindowFactory?: (factory: () => Promise<RendererWindow>) => void;
   sendToRenderer?: (
     webContentsId: number,
@@ -446,8 +448,11 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     if(request.url==='/assets/preload.js')transport.preloadRequests++;
     reply.header('Cache-Control','no-store');
   });
-  let readBridgeDiagnostics: () => unknown[] = () => [];
-  app.get('/__health',async()=>({ready:hostReady,host:os.hostname(),pid:process.pid,version:globalThis.__CODEX_SHIM_VALUES__?.version??null,transport,sessions:readBridgeDiagnostics(),pending:[...pendingCalls.values()].map(p=>({name:p.name,ageMs:Date.now()-p.since}))}));
+  let readBridgeDiagnostics = Object.assign((): {connected: boolean; parked: boolean}[] => [], {releaseInactive() {}});
+  const threadRelease = new ViewerThreadRelease(() => readBridgeDiagnostics(), () => readBridgeDiagnostics.releaseInactive());
+  bridgeState.setViewerThreadClient = client => threadRelease.attach(client);
+  app.addHook('onClose', async () => { threadRelease.dispose(); });
+  app.get('/__health',async()=>({ready:hostReady,host:os.hostname(),pid:process.pid,version:globalThis.__CODEX_SHIM_VALUES__?.version??null,transport,sessions:readBridgeDiagnostics(),ownership:threadRelease.snapshot(),pending:[...pendingCalls.values()].map(p=>({name:p.name,ageMs:Date.now()-p.since}))}));
   app.post('/__external',async(request,reply)=>{
     const body=request.body as {url?:string}|null;
     let target:URL;try{target=new URL(body?.url??'');if(!['https:','http:'].includes(target.protocol))throw Error();}catch{return reply.code(400).send({error:'Invalid URL'});}
@@ -703,7 +708,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       }
     };
     return {receive: input => {void receive(input).catch(error => console.error('[ipc-bridge] dispatch failed', error));}, dispose};
-  });
+  }, undefined, () => threadRelease.changed());
 
   await app.listen({ host: options.host, port: options.port });
   console.log(`IPC bridge listening at ws://${options.host}:${options.port}`);

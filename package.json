@@ -8,6 +8,7 @@
     "start": "electron viewer",
     "test": "npm run build:server && node --test test/*.test.cjs && python3 -B -m unittest discover -s test -p \"*_test.py\" && node desktop/test-access.cjs",
     "test:desktop": "node desktop/test-ownership.mjs && node desktop/test-goal-resume.mjs && node desktop/test-queued-delete.mjs",
+    "test:ownership-engine": "node --test test/engine-ownership.integration.cjs",
     "package:mac": "node scripts/package-macos.mjs",
     "test:accounts-ui": "electron test/accounts-window.smoke.cjs",
     "test:updates-ui": "electron test/updates-window.smoke.cjs",

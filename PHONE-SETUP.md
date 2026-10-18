@@ -42,11 +42,13 @@ require access to that Mac.
   **Transcribe and send** is a separate action that submits the resulting text.
 - Keep each recording under five minutes and 16 MB. If the remote Mac is busy
   transcribing another recording, try again after it finishes.
-- Brief network interruptions and app switches can resume the same page for up
-  to two minutes. A longer background period releases the remote view so it
-  cannot keep a desktop chat marked as in use. The phone then reopens the view
-  automatically when there is no unsent text. If **Reopen connection** appears
-  while you have a draft, copy the draft before choosing it.
+- Leaving the phone app or switching computers releases idle chats back to
+  the desktop after a short background check. Running tasks and requests waiting
+  for your input stay loaded until they finish. Returning to a released page
+  reopens it automatically if there is no unsent text, attachment, or dictation.
+  If **Reopen connection** appears with a draft, copy the draft before choosing it.
+  Brief network drops get a 15-second reconnect grace before idle chat cleanup;
+  the browser connection itself can survive for up to two minutes.
 
 Mobile layout changes apply at phone widths and short touch-only landscape
 sizes. Ordinary desktop layouts retain their full header and sidebar. Both
@@ -77,10 +79,25 @@ computer bar; on phones the switcher sits inside the task drawer and action
 menu, leaving one compact header. The existing desktop SSH client retains its
 original interface.
 
-Switching computers parks the hidden view. Returning within two minutes
-resumes it; after that, the old view releases its chat writer and reopens when
-selected again. An unsent draft stays on its page and is never submitted by
-the switcher.
+Switching computers parks the hidden view. When no foreground viewer remains
+on that host, the backend explicitly unsubscribes its idle chats and retires
+the parked view. Active tasks continue; the backend checks again when they
+finish, even if iOS has already discarded the page. An unsent draft stays on
+its page and is never submitted by the switcher.
+
+The auxiliary local engine starts with `thread_unload_delay_secs=0` so an
+unsubscribed idle chat promptly releases its writer lock. This command-line
+override does not change the native app or `~/.codex/config.toml`. Closing a
+BrowserWindow or unregistering an IPC client alone does **not** unload a chat.
+`control.cjs status` includes an `ownership` summary of observed loaded/active
+threads, releases, and cleanup errors. No chat text or credentials are included.
+
+To verify real writer handoff against an installed CLI, run
+`CODEX_TEST_CLI=/absolute/path/to/codex npm run test:ownership-engine` after
+`npm run build:server`. The tests use disposable homes and a loopback model
+fixture, reproduce a second-engine writer conflict, preserve an active turn,
+and verify the original chat can be resumed after cleanup. They do not send
+prompts to a paid model provider or use your saved chats.
 
 ### Configure a second Mac
 
