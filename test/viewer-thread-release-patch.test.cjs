@@ -23,3 +23,17 @@ test('reviewed auxiliary bundle exposes its local engine and scopes immediate un
     assert.deepEqual(await get(),id==='local'?['existing=true','thread_unload_delay_secs=0']:['existing=true']);
   }
 });
+
+test('background owner hook is pinned, parses, and registers only the local hosted manager',async()=>{
+  const {patchViewerBackgroundOwner}=await import('../desktop/viewer-background-owner-patch.mjs');
+  const {patchPrivateRemoteControl}=await import('../desktop/private-remote-control-patch.mjs');
+  const {patchAuxiliaryAutomationScheduler}=await import('../desktop/auxiliary-automations-patch.mjs');
+  const {patchViewerThreadRelease}=await import('../desktop/viewer-thread-release-patch.mjs');
+  const options={preparedVersion:'26.911.61220',asset:'main-DS3FMq4P.js'};
+  const before=patchViewerThreadRelease(patchAuxiliaryAutomationScheduler(patchPrivateRemoteControl(fs.readFileSync(path.join(__dirname,'../scratch/asar/.vite/build/main-DS3FMq4P.js'),'utf8')),options),options);
+  const after=patchViewerBackgroundOwner(before,options);
+  assert.doesNotThrow(()=>new vm.Script(after));
+  assert.throws(()=>patchViewerBackgroundOwner(before+' ',options),/SHA-256/);
+  assert.throws(()=>patchViewerBackgroundOwner(after,options),/SHA-256/);
+  assert.ok(after.includes('e.hostId===`local`&&u!=null&&globalThis.__codexElectronIpcBridge?.registerViewerBackgroundOwner'));
+});

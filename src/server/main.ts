@@ -23,6 +23,7 @@ import {startOutboundProxy} from './outbound-proxy';
 import {resumableBridge} from './resumable-bridge';
 import {registerLocalTranscription} from './local-transcription';
 import {ViewerThreadRelease, type ViewerThreadClient} from './viewer-thread-release';
+import {ViewerBackgroundOwner} from './viewer-background-owner';
 
 type ServerOptions = {
   host: string;
@@ -244,6 +245,7 @@ type RendererWindow = {
 };
 
 type IpcMainBridgeState = {
+  registerViewerBackgroundOwner?: (binding: Parameters<ViewerBackgroundOwner['attach']>[0]) => void;
   setViewerThreadClient?: (client: ViewerThreadClient) => void;
   setRendererWindowFactory?: (factory: () => Promise<RendererWindow>) => void;
   sendToRenderer?: (
@@ -449,9 +451,11 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     reply.header('Cache-Control','no-store');
   });
   let readBridgeDiagnostics = Object.assign((): {connected: boolean; parked: boolean}[] => [], {releaseInactive() {}});
-  const threadRelease = new ViewerThreadRelease(() => readBridgeDiagnostics(), () => readBridgeDiagnostics.releaseInactive());
+  const backgroundOwner = new ViewerBackgroundOwner();
+  bridgeState.registerViewerBackgroundOwner = binding => backgroundOwner.attach(binding);
+  const threadRelease = new ViewerThreadRelease(() => readBridgeDiagnostics(), () => readBridgeDiagnostics.releaseInactive(), backgroundOwner);
   bridgeState.setViewerThreadClient = client => threadRelease.attach(client);
-  app.addHook('onClose', async () => { threadRelease.dispose(); });
+  app.addHook('onClose', async () => { threadRelease.dispose(); backgroundOwner.dispose(); });
   app.get('/__health',async()=>({ready:hostReady,host:os.hostname(),pid:process.pid,version:globalThis.__CODEX_SHIM_VALUES__?.version??null,transport,sessions:readBridgeDiagnostics(),ownership:threadRelease.snapshot(),pending:[...pendingCalls.values()].map(p=>({name:p.name,ageMs:Date.now()-p.since}))}));
   app.post('/__external',async(request,reply)=>{
     const body=request.body as {url?:string}|null;

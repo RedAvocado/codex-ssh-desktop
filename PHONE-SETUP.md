@@ -44,7 +44,9 @@ require access to that Mac.
   transcribing another recording, try again after it finishes.
 - Leaving the phone app or switching computers releases idle chats back to
   the desktop after a short background check. Running tasks and requests waiting
-  for your input stay loaded until they finish. Returning to a released page
+  for your input stay loaded and get a background coordination owner, so a
+  compatible desktop client can follow and control them after iOS discards the
+  page. Returning to a released page
   reopens it automatically if there is no unsent text, attachment, or dictation.
   If **Reopen connection** appears with a draft, copy the draft before choosing it.
   Brief network drops get a 15-second reconnect grace before idle chat cleanup;
@@ -81,14 +83,25 @@ original interface.
 
 Switching computers parks the hidden view. When no foreground viewer remains
 on that host, the backend explicitly unsubscribes its idle chats and retires
-the parked view. Active tasks continue; the backend checks again when they
-finish, even if iOS has already discarded the page. An unsent draft stays on
+the parked view. Active tasks continue through a hosted conversation manager
+that keeps owner discovery, snapshots, updates, and explicit approval responses
+available independently of the phone page. The manager attaches to the same
+engine without starting or interrupting a turn. Idle chats with a desktop
+follower remain available until the follower leaves; other idle chats release.
+An unsent draft stays on
 its page and is never submitted by the switcher.
 
 The auxiliary local engine starts with `thread_unload_delay_secs=0` so an
 unsubscribed idle chat promptly releases its writer lock. This command-line
 override does not change the native app or `~/.codex/config.toml`. Closing a
 BrowserWindow or unregistering an IPC client alone does **not** unload a chat.
+Conversely, preserving an active engine alone does **not** preserve desktop
+access: the coordination owner and its stream listeners must also survive.
+The background manager only receives events and requests for chats it adopts;
+it never approves a pending request automatically. UI-only dynamic tools that
+require the discarded renderer return an explicit tool failure instead of
+hanging. Ordinary engine and MCP tools continue to run. The native app is not
+patched, and the prepared-bundle hook refuses unreviewed versions or hashes.
 `control.cjs status` includes an `ownership` summary of observed loaded/active
 threads, releases, and cleanup errors. No chat text or credentials are included.
 

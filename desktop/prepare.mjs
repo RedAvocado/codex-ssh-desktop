@@ -8,6 +8,7 @@ import {patchPrivateAnalytics} from './analytics-patch.mjs';
 import {patchPrivateRemoteControl} from './private-remote-control-patch.mjs';
 import {patchAuxiliaryAutomationScheduler,patchAuxiliaryAutomationRenderer} from './auxiliary-automations-patch.mjs';
 import {patchViewerThreadRelease} from './viewer-thread-release-patch.mjs';
+import {patchViewerBackgroundOwner} from './viewer-background-owner-patch.mjs';
 import {patchOwnership,patchOwnerFollowing,patchConflictRecovery} from './ownership-patch.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -47,6 +48,7 @@ main=patchBrowserServicePath(main);
 if(currentBuild)main=patchPrivateRemoteControl(main);
 if(currentBuild)main=patchAuxiliaryAutomationScheduler(main,{preparedVersion:installed.version,asset:mainFile[0]});
 if(currentBuild)main=patchViewerThreadRelease(main,{preparedVersion:installed.version,asset:mainFile[0]});
+if(currentBuild)main=patchViewerBackgroundOwner(main,{preparedVersion:installed.version,asset:mainFile[0]});
 fs.writeFileSync(mainPath,main);
 
 const htmlPath=path.join(out,'webview/index.html');

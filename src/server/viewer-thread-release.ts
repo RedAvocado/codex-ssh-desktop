@@ -8,6 +8,11 @@ export type ViewerThreadClient = {
 };
 
 type View = {connected: boolean; parked: boolean};
+type BackgroundOwner = {
+  adopt(id: string, isCurrent: () => boolean): Promise<void>;
+  hasFollowers(id: string): boolean;
+  release(id: string): void;
+};
 
 export class ViewerThreadRelease {
   private client?: ViewerThreadClient;
@@ -18,7 +23,8 @@ export class ViewerThreadRelease {
   private released = new Set<string>();
   private observed = {loaded: 0, active: 0, released: 0, errors: 0};
 
-  constructor(private views: () => View[], private retireInactiveViews: () => void) {}
+  constructor(private views: () => View[], private retireInactiveViews: () => void,
+    private backgroundOwner?: BackgroundOwner) {}
 
   attach(client: ViewerThreadClient) {
     this.removeListener?.();
@@ -84,7 +90,17 @@ export class ViewerThreadRelease {
       if (this.released.has(id)) continue;
       const thread = await client.readThread(id, {includeTurns: false});
       // Unknown, running, approval, and user-input states all stay loaded.
-      if (thread?.status?.type !== 'idle') { this.observed.active++; continue; }
+      if (thread?.status?.type !== 'idle') {
+        this.observed.active++;
+        if (thread?.status?.type === 'active' && this.backgroundOwner && available()) {
+          this.retireInactiveViews();
+          await this.backgroundOwner.adopt(id, available);
+        }
+        continue;
+      }
+      // A native client may now be following the background owner. Its idle
+      // composer must remain usable until that client stops following.
+      if (this.backgroundOwner?.hasFollowers(id)) continue;
       if (!available() || client.getPendingRequestCount() > 0) return;
       // A retained renderer cannot keep its old owner role after we unsubscribe
       // on its behalf. End only background views; existing draft recovery still
@@ -93,6 +109,7 @@ export class ViewerThreadRelease {
       await client.sendAppServerRequest('thread/unsubscribe', {threadId: id}, () => {
         if (!available() || client.getPendingRequestCount() > 0) throw Error('Viewer became active');
       });
+      this.backgroundOwner?.release(id);
       this.released.add(id);
       this.observed.released++;
       console.info('[viewer-ownership] Released an idle chat from the auxiliary engine');
